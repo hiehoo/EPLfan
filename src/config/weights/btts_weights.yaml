@@ -1,0 +1,28 @@
+# BTTS Weight Profiles
+# Uses xGA instead of ELO - defense impacts both teams scoring
+
+market_trust:
+  description: "Near kick-off"
+  betfair: 0.45
+  xg: 0.25
+  xga: 0.15
+  form: 0.15
+
+balanced:
+  description: "Mid-week"
+  betfair: 0.35
+  xg: 0.30
+  xga: 0.20
+  form: 0.15
+
+analytics_first:
+  description: "Early week"
+  betfair: 0.25
+  xg: 0.35
+  xga: 0.25
+  form: 0.15
+
+time_thresholds:
+  analytics_first: 96
+  balanced: 24
+  market_trust: 0

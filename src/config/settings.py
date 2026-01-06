@@ -1,0 +1,125 @@
+"""Application settings with validation."""
+from pathlib import Path
+from typing import Optional
+
+import yaml
+from pydantic import Field, field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class BetfairSettings(BaseSettings):
+    """Betfair API configuration."""
+
+    model_config = SettingsConfigDict(env_prefix="BETFAIR_")
+
+    username: str = ""
+    password: str = ""
+    app_key: str = ""
+    certs_path: Path = Path("./certs")
+
+
+class TelegramSettings(BaseSettings):
+    """Telegram bot configuration."""
+
+    model_config = SettingsConfigDict(env_prefix="TELEGRAM_")
+
+    bot_token: str = ""
+    chat_id: str = ""
+
+
+class PolymarketSettings(BaseSettings):
+    """Polymarket configuration."""
+
+    model_config = SettingsConfigDict(env_prefix="POLYMARKET_")
+
+    private_key: str = ""
+
+
+class AppSettings(BaseSettings):
+    """Application-wide settings."""
+
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    log_level: str = "INFO"
+    database_path: Path = Path("./data/epl_indicator.db")
+    scan_interval_minutes: int = 15
+
+    # Edge thresholds
+    edge_threshold_1x2: float = 0.05  # 5%
+    edge_threshold_ou: float = 0.07   # 7%
+    edge_threshold_btts: float = 0.07  # 7%
+
+    # Nested settings
+    betfair: BetfairSettings = Field(default_factory=BetfairSettings)
+    telegram: TelegramSettings = Field(default_factory=TelegramSettings)
+    polymarket: PolymarketSettings = Field(default_factory=PolymarketSettings)
+
+    @field_validator("log_level")
+    @classmethod
+    def validate_log_level(cls, v: str) -> str:
+        """Validate log level is valid."""
+        valid_levels = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
+        if v.upper() not in valid_levels:
+            raise ValueError(f"Invalid log level: {v}. Must be one of {valid_levels}")
+        return v.upper()
+
+
+def load_weight_config(market_type: str) -> dict:
+    """Load weight configuration for a market type.
+
+    Args:
+        market_type: One of '1x2', 'ou', 'btts'
+
+    Returns:
+        Dictionary with weight profiles and time thresholds
+    """
+    weights_dir = Path(__file__).parent / "weights"
+    weight_file = weights_dir / f"{market_type}_weights.yaml"
+
+    if not weight_file.exists():
+        raise FileNotFoundError(f"Weight config not found: {weight_file}")
+
+    with open(weight_file) as f:
+        config = yaml.safe_load(f)
+
+    # Validate weights sum to 1.0 for each profile
+    for profile_name, profile in config.items():
+        if profile_name == "time_thresholds":
+            continue
+        weights = {k: v for k, v in profile.items() if k != "description"}
+        total = sum(weights.values())
+        if abs(total - 1.0) > 0.001:
+            raise ValueError(
+                f"Weights in {market_type}/{profile_name} sum to {total}, expected 1.0"
+            )
+
+    return config
+
+
+def get_weight_profile(market_type: str, hours_to_kickoff: float) -> dict:
+    """Get appropriate weight profile based on time to kickoff.
+
+    Args:
+        market_type: One of '1x2', 'ou', 'btts'
+        hours_to_kickoff: Hours until match starts
+
+    Returns:
+        Dictionary with weights for each data source
+    """
+    config = load_weight_config(market_type)
+    thresholds = config.get("time_thresholds", {})
+
+    # Determine profile based on time
+    if hours_to_kickoff > thresholds.get("analytics_first", 96):
+        profile_name = "analytics_first"
+    elif hours_to_kickoff > thresholds.get("balanced", 24):
+        profile_name = "balanced"
+    else:
+        profile_name = "market_trust"
+
+    profile = config[profile_name]
+    return {k: v for k, v in profile.items() if k != "description"}
+
+
+# Singleton instance
+settings = AppSettings()

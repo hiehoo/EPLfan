@@ -1,0 +1,29 @@
+# 1X2 (Match Result) Weight Profiles
+# Total weights must sum to 1.0
+
+market_trust:
+  description: "Near kick-off (H-2 to H-0) - Trust efficient market"
+  betfair: 0.55
+  xg: 0.20
+  elo: 0.15
+  form: 0.10
+
+balanced:
+  description: "Mid-week (D-3 to D-1) - Equal trust"
+  betfair: 0.40
+  xg: 0.30
+  elo: 0.20
+  form: 0.10
+
+analytics_first:
+  description: "Early week (D-7 to D-4) - Trust analytics before market adjusts"
+  betfair: 0.30
+  xg: 0.35
+  elo: 0.25
+  form: 0.10
+
+# Time-based auto-selection thresholds (hours before kick-off)
+time_thresholds:
+  analytics_first: 96  # > 4 days
+  balanced: 24         # > 1 day
+  market_trust: 0      # <= 1 day (default)

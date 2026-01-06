@@ -1,0 +1,28 @@
+# Over/Under Weight Profiles
+# xG-heavy because goals directly derived from xG
+
+market_trust:
+  description: "Near kick-off - Market has priced goals"
+  betfair: 0.45
+  xg: 0.35
+  elo: 0.05
+  form: 0.15
+
+balanced:
+  description: "Mid-week"
+  betfair: 0.35
+  xg: 0.40
+  elo: 0.05
+  form: 0.20
+
+analytics_first:
+  description: "Early week - xG dominant"
+  betfair: 0.25
+  xg: 0.50
+  elo: 0.05
+  form: 0.20
+
+time_thresholds:
+  analytics_first: 96
+  balanced: 24
+  market_trust: 0
