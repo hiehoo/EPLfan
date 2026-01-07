@@ -220,6 +220,160 @@ def train_models(force: bool):
 
 
 @cli.command()
+@click.option("--seasons", default=3, help="Number of seasons to seed (1-3)")
+def seed_historical(seasons: int):
+    """Seed historical EPL data from football-data.co.uk."""
+    from src.config import setup_logging
+    from src.fetchers.historical_data_seeder import HistoricalDataSeeder
+
+    setup_logging()
+
+    click.echo(f"Seeding {seasons} season(s) of historical EPL data...")
+    click.echo("Source: football-data.co.uk")
+
+    seeder = HistoricalDataSeeder()
+
+    # Limit seasons
+    seeder.SEASONS = seeder.SEASONS[-seasons:]
+
+    results = seeder.seed_all_seasons()
+
+    click.echo("\nSeeding Results:")
+    click.echo("-" * 40)
+    click.echo(f"Total matches found: {results['total']}")
+    click.echo(f"Imported: {results['imported']}")
+    click.echo(f"Skipped (duplicates): {results['skipped']}")
+    click.echo(f"Errors: {results['errors']}")
+
+
+@cli.command()
+def seed_team_stats():
+    """Generate TeamStats from historical match data."""
+    from src.config import setup_logging
+    from src.fetchers.historical_data_seeder import HistoricalDataSeeder
+
+    setup_logging()
+
+    click.echo("Generating TeamStats from historical matches...")
+
+    seeder = HistoricalDataSeeder()
+    results = seeder.seed_team_stats()
+
+    click.echo("\nTeam Stats Results:")
+    click.echo("-" * 40)
+    click.echo(f"Teams processed: {results['teams']}")
+    click.echo(f"Stats entries created: {results['stats_created']}")
+
+
+@cli.command()
+@click.option("--days", default=180, help="Lookback period in days")
+@click.option("--market", default="all", help="Market: 1x2, ou, btts, or all")
+@click.option("--min-edge", default=0.0, help="Minimum edge filter")
+@click.option("--output", default="table", help="Output format: table or json")
+def backtest(days: int, market: str, min_edge: float, output: str):
+    """Run backtest on historical predictions."""
+    from src.config import setup_logging
+    from src.models.backtester import Backtester, BacktestParams
+
+    setup_logging()
+
+    click.echo(f"Running backtest: {days} days, market={market}, min_edge={min_edge}")
+
+    backtester = Backtester()
+    params = BacktestParams(days=days, market=market, min_edge=min_edge)
+    report = backtester.run(params)
+
+    if output == "json":
+        click.echo(backtester.to_json(report))
+    else:
+        _print_backtest_table(report)
+
+
+def _print_backtest_table(report):
+    """Print backtest report as formatted table."""
+    click.echo("\n" + "=" * 50)
+    click.echo("BACKTEST RESULTS")
+    click.echo("=" * 50)
+
+    click.echo(f"\nPeriod: {report.period_start.date()} to {report.period_end.date()}")
+    click.echo(f"Predictions: {report.n_predictions}")
+    click.echo(f"Correct: {report.n_correct}")
+
+    click.echo("\n--- Performance ---")
+    click.echo(f"Win Rate: {report.win_rate:.1%}")
+    click.echo(f"ROI: {report.roi_pct:+.2f}%")
+    click.echo(f"Profit Factor: {report.profit_factor:.2f}")
+
+    click.echo("\n--- Statistical ---")
+    click.echo(f"Brier Score: {report.brier_score:.4f}")
+    click.echo(f"Calibration Error: {report.calibration_error:.4f}")
+
+    click.echo("\n--- Risk ---")
+    click.echo(f"Sharpe Ratio: {report.sharpe_ratio:.2f}")
+    click.echo(f"Max Drawdown: {report.max_drawdown:.2f}")
+    click.echo(f"Win Streak: {report.max_win_streak}")
+    click.echo(f"Lose Streak: {report.max_lose_streak}")
+
+    if report.by_market:
+        click.echo("\n--- By Market ---")
+        for market, stats in report.by_market.items():
+            click.echo(f"\n{market.upper()}:")
+            click.echo(f"  Predictions: {stats.n_predictions}")
+            click.echo(f"  Win Rate: {stats.win_rate:.1%}")
+            click.echo(f"  ROI: {stats.roi_pct:+.2f}%")
+            click.echo(f"  Avg Edge: {stats.avg_edge:.2%}")
+
+
+@cli.command()
+@click.option("--target", default="all", help="Target: ou, btts, or all")
+@click.option("--min-samples", default=100, help="Minimum training samples")
+@click.option("--force", is_flag=True, help="Save model even if worse")
+def retrain(target: str, min_samples: int, force: bool):
+    """Retrain ML models with holdout validation."""
+    from src.config import setup_logging
+    from src.models.training_pipeline import training_pipeline
+
+    setup_logging()
+
+    click.echo(f"Retraining models: target={target}, min_samples={min_samples}")
+
+    results = training_pipeline.retrain_with_validation(
+        target=target,
+        min_samples=min_samples,
+        force_save=force,
+    )
+
+    _print_retrain_results(results)
+
+
+def _print_retrain_results(results: dict):
+    """Print retrain results as formatted output."""
+    click.echo("\n" + "=" * 50)
+    click.echo("RETRAIN RESULTS")
+    click.echo("=" * 50)
+
+    click.echo(f"\nStatus: {results['status']}")
+
+    if results["status"] == "error":
+        click.echo(f"Reason: {results.get('reason', 'unknown')}")
+        if "n_examples" in results:
+            click.echo(f"Examples found: {results['n_examples']}")
+        return
+
+    click.echo(f"Train samples: {results.get('n_train', 'N/A')}")
+    click.echo(f"Test samples: {results.get('n_test', 'N/A')}")
+
+    if "targets" in results:
+        for target, data in results["targets"].items():
+            click.echo(f"\n{target.upper()} Model:")
+            click.echo(f"  Status: {data['status']}")
+            if data.get("old_accuracy"):
+                click.echo(f"  Old Accuracy: {data['old_accuracy']:.1%}")
+            click.echo(f"  New Accuracy: {data['new_accuracy']:.1%}")
+            click.echo(f"  Improvement: {data['improvement']:+.1%}")
+
+
+@cli.command()
 def status():
     """Show system status."""
     from src.storage.database import db

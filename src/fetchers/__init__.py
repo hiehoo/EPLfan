@@ -8,6 +8,7 @@ from src.fetchers.betfair_fetcher import BetfairFetcher, BetfairOdds
 from src.fetchers.understat_fetcher import UnderstatFetcher, TeamXGData
 from src.fetchers.clubelo_fetcher import ClubELOFetcher, TeamELO
 from src.fetchers.polymarket_fetcher import PolymarketFetcher, PolymarketPrices
+from src.fetchers.historical_data_seeder import HistoricalDataSeeder, historical_seeder
 from src.storage.database import db
 from src.storage.models import Match, OddsSnapshot, TeamStats
 
@@ -23,6 +24,8 @@ __all__ = [
     "TeamELO",
     "PolymarketFetcher",
     "PolymarketPrices",
+    "HistoricalDataSeeder",
+    "historical_seeder",
 ]
 
 
