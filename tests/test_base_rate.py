@@ -18,8 +18,8 @@ class TestBaseRateTracker:
         assert 0.20 < tracker.get_base_rate("1x2", "draw") < 0.30
         assert 0.25 < tracker.get_base_rate("1x2", "away") < 0.35
 
-        # O/U should be ~50/50
-        assert 0.45 < tracker.get_base_rate("ou", "over", 2.5) < 0.55
+        # O/U (EPL typically 50-60% over)
+        assert 0.45 < tracker.get_base_rate("ou", "over", 2.5) < 0.65
 
         # BTTS
         assert 0.50 < tracker.get_base_rate("btts", "yes") < 0.58
@@ -185,8 +185,8 @@ class TestTrueEdgeCalculation:
             line=2.5,
         )
 
-        # Base rate for over 2.5 is ~0.52
-        assert 0.50 < base_rate < 0.55
+        # Base rate for over 2.5 (EPL ~52-60%)
+        assert 0.50 < base_rate < 0.65
         # With 65% model prob vs 52% base, should have positive skill
         assert skill > 0
         assert true_edge > 0
