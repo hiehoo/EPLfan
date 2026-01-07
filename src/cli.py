@@ -189,6 +189,37 @@ def init_db():
 
 
 @cli.command()
+@click.option("--force", is_flag=True, help="Force full retrain")
+def train_models(force: bool):
+    """Train ML classification models."""
+    from src.config import setup_logging
+    from src.models.training_pipeline import training_pipeline
+
+    setup_logging()
+
+    click.echo("Starting ML model training...")
+
+    if force:
+        results = training_pipeline.run_full_training()
+    else:
+        results = training_pipeline.run_incremental_update()
+
+    # Display results
+    click.echo("\nTraining Results:")
+    click.echo("-" * 40)
+
+    for stage, data in results.get("stages", {}).items():
+        click.echo(f"\n{stage}:")
+        if isinstance(data, dict):
+            for key, val in data.items():
+                click.echo(f"  {key}: {val}")
+        else:
+            click.echo(f"  {data}")
+
+    click.echo("\nTraining complete!")
+
+
+@cli.command()
 def status():
     """Show system status."""
     from src.storage.database import db

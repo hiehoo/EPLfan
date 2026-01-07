@@ -39,7 +39,7 @@ def render():
     match_probs, weighted_probs, edge_analysis = analysis_result
 
     # Tabs for different views
-    tab1, tab2, tab3, tab4 = st.tabs(["1X2", "Over/Under", "BTTS", "Poisson Matrix"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["1X2", "Over/Under", "BTTS", "Poisson Matrix", "ML Insights"])
 
     with tab1:
         _render_1x2_analysis(match_probs, weighted_probs, edge_analysis)
@@ -52,6 +52,9 @@ def render():
 
     with tab4:
         _render_poisson_matrix(match_probs)
+
+    with tab5:
+        _render_ml_insights(edge_analysis)
 
 
 def _get_upcoming_matches() -> list:
@@ -360,3 +363,85 @@ def _edge_metric(label: str, fair_prob: float, edge: float):
         delta=f"{edge * 100:+.1f}% edge",
         delta_color=delta_color,
     )
+
+
+def _render_ml_insights(edge_analysis):
+    """Render ML model insights."""
+    st.subheader("ML Classification Insights")
+
+    # Check if ML data available
+    signal_ou = edge_analysis.signal_ou
+    signal_btts = edge_analysis.signal_btts
+
+    has_ml_ou = signal_ou and hasattr(signal_ou, "ml_prob") and signal_ou.ml_prob is not None
+    has_ml_btts = signal_btts and hasattr(signal_btts, "ml_prob") and signal_btts.ml_prob is not None
+
+    if not has_ml_ou and not has_ml_btts:
+        st.info("ML models not trained or no ML data available for this match. "
+                "Run `python -m src.cli train-models` to train ML classifiers.")
+        return
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.markdown("**Over/Under 2.5**")
+        if has_ml_ou:
+            poisson_prob = getattr(signal_ou, "poisson_prob", signal_ou.fair_prob)
+            ml_prob = signal_ou.ml_prob
+            ml_conf = getattr(signal_ou, "ml_confidence", "unknown")
+
+            # Show comparison
+            st.metric(
+                label="Poisson Model",
+                value=f"{poisson_prob:.1%}",
+                help="Traditional Poisson-based probability",
+            )
+            st.metric(
+                label=f"ML Ensemble ({ml_conf})",
+                value=f"{ml_prob:.1%}",
+                delta=f"{(ml_prob - poisson_prob) * 100:+.1f}% vs Poisson",
+            )
+            st.metric(
+                label="Hybrid (Blended)",
+                value=f"{signal_ou.fair_prob:.1%}",
+            )
+        else:
+            st.caption("No ML prediction available")
+
+    with col2:
+        st.markdown("**Both Teams to Score**")
+        if has_ml_btts:
+            poisson_prob = getattr(signal_btts, "poisson_prob", signal_btts.fair_prob)
+            ml_prob = signal_btts.ml_prob
+            ml_conf = getattr(signal_btts, "ml_confidence", "unknown")
+
+            st.metric(
+                label="Poisson Model",
+                value=f"{poisson_prob:.1%}",
+            )
+            st.metric(
+                label=f"ML Ensemble ({ml_conf})",
+                value=f"{ml_prob:.1%}",
+                delta=f"{(ml_prob - poisson_prob) * 100:+.1f}% vs Poisson",
+            )
+            st.metric(
+                label="Hybrid (Blended)",
+                value=f"{signal_btts.fair_prob:.1%}",
+            )
+        else:
+            st.caption("No ML prediction available")
+
+    # Agreement indicator
+    if has_ml_ou:
+        agreement = getattr(signal_ou, "agreement_score", 1.0)
+        if agreement > 0.9:
+            st.success(f"Models strongly agree ({agreement:.0%})")
+        elif agreement > 0.7:
+            st.warning(f"Models partially agree ({agreement:.0%})")
+        else:
+            st.error(f"Models disagree significantly ({agreement:.0%})")
+
+    # Model source info
+    st.markdown("---")
+    st.caption("**Model Info:** Hybrid predictions blend Poisson (statistical) and ML "
+              "(LightGBM/XGBoost/RandomForest ensemble) based on ML confidence level.")

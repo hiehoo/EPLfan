@@ -155,6 +155,11 @@ def _render_signal_cards(signals: list):
             with col4:
                 st.metric("Fair Price", f"{signal['fair_prob'] * 100:.1f}%")
 
+            # Model source indicator
+            model_source = signal.get("model_source", "poisson")
+            ml_confidence = signal.get("ml_confidence")
+            _render_model_source(model_source, ml_confidence)
+
             # Details expander
             with st.expander("Details"):
                 kickoff_str = match.kickoff.strftime("%Y-%m-%d %H:%M") if match.kickoff else "N/A"
@@ -162,4 +167,23 @@ def _render_signal_cards(signals: list):
                 st.write(f"**Polymarket:** {signal['market_prob'] * 100:.1f}%")
                 st.write(f"**Weight Profile:** {signal['preset']}")
 
+                # Show hybrid details if available
+                if signal.get("poisson_prob") and signal.get("ml_prob"):
+                    st.write("---")
+                    st.write(f"**Poisson:** {signal['poisson_prob'] * 100:.1f}%")
+                    st.write(f"**ML:** {signal['ml_prob'] * 100:.1f}%")
+                    agreement = signal.get("agreement_score", 1.0)
+                    st.write(f"**Agreement:** {agreement * 100:.0f}%")
+
             st.divider()
+
+
+def _render_model_source(model_source: str, ml_confidence: Optional[str] = None):
+    """Render model source indicator."""
+    if model_source == "hybrid":
+        conf_display = f" ({ml_confidence})" if ml_confidence else ""
+        st.caption(f"🔀 Hybrid Model{conf_display}")
+    elif model_source == "ml":
+        st.caption("🤖 ML Classifier")
+    else:
+        st.caption("📊 Poisson Model")

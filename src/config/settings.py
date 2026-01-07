@@ -54,6 +54,17 @@ class PolymarketSettings(BaseSettings):
         return bool(self.private_key.get_secret_value())
 
 
+class WindowConfig(BaseSettings):
+    """Rolling window configuration."""
+    model_config = SettingsConfigDict(env_prefix="WINDOW_")
+
+    window_1x2: int = 10
+    window_ou_2_5: int = 6
+    window_btts: int = 4
+    window_shots: int = 5
+    window_xg: int = 8
+
+
 class AppSettings(BaseSettings):
     """Application-wide settings."""
 
@@ -72,6 +83,7 @@ class AppSettings(BaseSettings):
     betfair: BetfairSettings = Field(default_factory=BetfairSettings)
     telegram: TelegramSettings = Field(default_factory=TelegramSettings)
     polymarket: PolymarketSettings = Field(default_factory=PolymarketSettings)
+    windows: WindowConfig = Field(default_factory=WindowConfig)
 
     @field_validator("log_level")
     @classmethod
@@ -138,6 +150,15 @@ def get_weight_profile(market_type: str, hours_to_kickoff: float) -> dict:
 
     profile = config[profile_name]
     return {k: v for k, v in profile.items() if k != "description"}
+
+
+def load_window_config() -> dict:
+    """Load window configuration from YAML."""
+    windows_file = Path(__file__).parent / "weights" / "windows.yaml"
+    if windows_file.exists():
+        with open(windows_file) as f:
+            return yaml.safe_load(f)
+    return {}
 
 
 # Singleton instance

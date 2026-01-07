@@ -10,6 +10,13 @@ from src.models.base_rate_tracker import base_rate_tracker
 logger = logging.getLogger(__name__)
 
 
+class ModelSource(Enum):
+    """Source of probability estimate."""
+    POISSON = "poisson"
+    ML_CLASSIFIER = "ml"
+    HYBRID = "hybrid"
+
+
 class SignalDirection(Enum):
     """Trading signal direction."""
     NONE = "none"
@@ -39,6 +46,16 @@ class EdgeSignal:
     true_edge: float = 0.0  # edge vs base rate
     skill_component: float = 0.0  # model_prob - base_rate
     is_elite_match: bool = False
+
+
+@dataclass
+class HybridEdgeSignal(EdgeSignal):
+    """Edge signal with hybrid model info."""
+    model_source: ModelSource = ModelSource.POISSON
+    poisson_prob: float = 0.0
+    ml_prob: Optional[float] = None
+    ml_confidence: Optional[str] = None
+    agreement_score: float = 1.0  # How much Poisson and ML agree
 
 
 @dataclass
@@ -292,5 +309,160 @@ class EdgeDetector:
             return opposites.get(outcome, SignalDirection.NONE)
 
 
-# Singleton instance
+class HybridEdgeDetector(EdgeDetector):
+    """Edge detector combining Poisson and ML predictions."""
+
+    # Weight for ML vs Poisson
+    ML_WEIGHT_HIGH_CONFIDENCE = 0.6
+    ML_WEIGHT_MEDIUM_CONFIDENCE = 0.4
+    ML_WEIGHT_LOW_CONFIDENCE = 0.2
+
+    def __init__(self, use_ml: bool = True):
+        super().__init__()
+        self._use_ml = use_ml
+        self._ml_initialized = False
+
+    @property
+    def use_ml(self) -> bool:
+        """Check if ML is available and enabled."""
+        if not self._use_ml:
+            return False
+        if not self._ml_initialized:
+            try:
+                from src.models.ml_classifier import ml_classifier_ou
+                self._ml_initialized = ml_classifier_ou.is_trained
+            except ImportError:
+                self._ml_initialized = False
+        return self._ml_initialized
+
+    def analyze_match_hybrid(
+        self,
+        match_id: str,
+        home_team: str,
+        away_team: str,
+        fair_probs,  # WeightedProbabilities (Poisson-based)
+        market_probs,  # MatchProbabilities
+        features=None,  # Optional[MatchFeatures]
+    ) -> MatchEdgeAnalysis:
+        """Analyze edges using hybrid Poisson + ML approach."""
+        from src.models.ml_classifier import ml_classifier_ou, ml_classifier_btts
+
+        # Get base Poisson analysis
+        base_analysis = self.analyze_match(
+            match_id=match_id,
+            home_team=home_team,
+            away_team=away_team,
+            fair_probs=fair_probs,
+            market_probs=market_probs,
+        )
+
+        if not self.use_ml or features is None:
+            return base_analysis
+
+        # Get ML predictions
+        feature_array = features.to_array() if hasattr(features, 'to_array') else features
+        ml_ou = ml_classifier_ou.predict_proba(feature_array)
+        ml_btts = ml_classifier_btts.predict_proba(feature_array)
+
+        # Enhance O/U signal with ML
+        if base_analysis.signal_ou:
+            enhanced_ou = self._enhance_with_ml(
+                base_signal=base_analysis.signal_ou,
+                ml_result=ml_ou,
+                market_type="ou",
+                home_team=home_team,
+                away_team=away_team,
+            )
+            base_analysis.signal_ou = enhanced_ou
+
+        # Enhance BTTS signal with ML
+        if base_analysis.signal_btts:
+            enhanced_btts = self._enhance_with_ml(
+                base_signal=base_analysis.signal_btts,
+                ml_result=ml_btts,
+                market_type="btts",
+                home_team=home_team,
+                away_team=away_team,
+            )
+            base_analysis.signal_btts = enhanced_btts
+
+        # Re-evaluate best signal
+        actionable = [
+            s for s in [base_analysis.signal_1x2, base_analysis.signal_ou, base_analysis.signal_btts]
+            if s and s.is_actionable
+        ]
+        base_analysis.best_signal = max(actionable, key=lambda s: abs(s.true_edge), default=None)
+
+        return base_analysis
+
+    def _enhance_with_ml(
+        self,
+        base_signal: EdgeSignal,
+        ml_result,
+        market_type: str,
+        home_team: str = "",
+        away_team: str = "",
+    ) -> HybridEdgeSignal:
+        """Enhance Poisson signal with ML prediction."""
+
+        # Calculate ML weight based on confidence
+        ml_weight = {
+            "high": self.ML_WEIGHT_HIGH_CONFIDENCE,
+            "medium": self.ML_WEIGHT_MEDIUM_CONFIDENCE,
+            "low": self.ML_WEIGHT_LOW_CONFIDENCE,
+        }.get(ml_result.confidence, 0.2)
+
+        poisson_weight = 1 - ml_weight
+
+        # Determine ML prob for this outcome
+        if base_signal.outcome in ("over", "yes"):
+            ml_prob = ml_result.probability
+        elif base_signal.outcome in ("under", "no"):
+            ml_prob = 1 - ml_result.probability
+        else:
+            ml_prob = base_signal.fair_prob
+
+        # Blend probabilities
+        hybrid_prob = (
+            poisson_weight * base_signal.fair_prob +
+            ml_weight * ml_prob
+        )
+
+        # Calculate agreement score (0-1)
+        agreement = 1 - abs(base_signal.fair_prob - ml_prob)
+
+        # Recalculate true edge with hybrid prob
+        true_edge, skill, base_rate, is_elite = self.calculate_true_edge(
+            model_prob=hybrid_prob,
+            market_prob=base_signal.market_prob,
+            market_type=market_type,
+            outcome=base_signal.outcome,
+            home_team=home_team,
+            away_team=away_team,
+        )
+
+        return HybridEdgeSignal(
+            market_type=base_signal.market_type,
+            outcome=base_signal.outcome,
+            fair_prob=hybrid_prob,
+            market_prob=base_signal.market_prob,
+            edge=hybrid_prob - base_signal.market_prob,
+            edge_pct=(hybrid_prob - base_signal.market_prob) * 100,
+            direction=base_signal.direction,
+            is_actionable=abs(true_edge) >= base_signal.threshold_used,
+            threshold_used=base_signal.threshold_used,
+            base_rate=base_rate,
+            true_edge=true_edge,
+            skill_component=skill,
+            is_elite_match=is_elite,
+            model_source=ModelSource.HYBRID,
+            poisson_prob=base_signal.fair_prob,
+            ml_prob=ml_prob,
+            ml_confidence=ml_result.confidence,
+            agreement_score=agreement,
+        )
+
+
+# Singleton instances
 edge_detector = EdgeDetector()
+hybrid_edge_detector = HybridEdgeDetector()

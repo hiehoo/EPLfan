@@ -1,0 +1,36 @@
+# Rolling window sizes per market type
+# Based on article findings: different markets need different lookback
+
+rolling_windows:
+  # 1X2: Form-based, needs longer history
+  1x2:
+    default: 10
+    short_term: 5
+    long_term: 15
+    description: "Match result benefits from longer form windows"
+
+  # O/U: Article shows 5-match optimal for near-50/50 lines
+  ou:
+    line_1_5:
+      default: 4
+    line_2_5:
+      default: 6
+      short_term: 4
+      long_term: 8
+    line_3_5:
+      default: 8
+    description: "O/U needs tighter windows, goals are volatile"
+
+  # BTTS: Recent attacking form matters most
+  btts:
+    default: 4
+    short_term: 3
+    long_term: 6
+    description: "BTTS is about current attacking form"
+
+# Feature windows (for ML model)
+feature_windows:
+  shots: 5           # Shot volume changes quickly
+  xg: 8              # xG more stable
+  goals_volatility: 10
+  form: 5            # Recent form

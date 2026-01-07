@@ -89,6 +89,19 @@ class TeamStats(Base):
     elo_rating: Mapped[float] = mapped_column(Float)
     elo_rank: Mapped[int] = mapped_column(Integer)
 
+    # Shot data (Phase 2)
+    shots_per_game: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    shots_against_per_game: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    shots_on_target_per_game: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+
+    # Volatility (Phase 2)
+    goal_volatility: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    xg_volatility: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+
+    # Efficiency (Phase 2)
+    shot_conversion_rate: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    xg_overperformance: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+
     # Elite team tracking
     is_elite: Mapped[bool] = mapped_column(Boolean, default=False)
     elite_adjustment: Mapped[float] = mapped_column(Float, default=1.0)
