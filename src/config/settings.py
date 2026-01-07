@@ -1,10 +1,13 @@
 """Application settings with validation."""
+import logging
 from pathlib import Path
 from typing import Optional
 
 import yaml
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+logger = logging.getLogger(__name__)
 
 
 class BetfairSettings(BaseSettings):
@@ -13,9 +16,17 @@ class BetfairSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="BETFAIR_")
 
     username: str = ""
-    password: str = ""
-    app_key: str = ""
+    password: SecretStr = SecretStr("")
+    app_key: SecretStr = SecretStr("")
     certs_path: Path = Path("./certs")
+
+    def is_configured(self) -> bool:
+        """Check if Betfair credentials are configured."""
+        return bool(
+            self.username
+            and self.password.get_secret_value()
+            and self.app_key.get_secret_value()
+        )
 
 
 class TelegramSettings(BaseSettings):
@@ -23,8 +34,12 @@ class TelegramSettings(BaseSettings):
 
     model_config = SettingsConfigDict(env_prefix="TELEGRAM_")
 
-    bot_token: str = ""
+    bot_token: SecretStr = SecretStr("")
     chat_id: str = ""
+
+    def is_configured(self) -> bool:
+        """Check if Telegram credentials are configured."""
+        return bool(self.bot_token.get_secret_value() and self.chat_id)
 
 
 class PolymarketSettings(BaseSettings):
@@ -32,7 +47,11 @@ class PolymarketSettings(BaseSettings):
 
     model_config = SettingsConfigDict(env_prefix="POLYMARKET_")
 
-    private_key: str = ""
+    private_key: SecretStr = SecretStr("")
+
+    def is_configured(self) -> bool:
+        """Check if Polymarket private key is configured."""
+        return bool(self.private_key.get_secret_value())
 
 
 class AppSettings(BaseSettings):

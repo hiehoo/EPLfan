@@ -1,0 +1,24 @@
+# Elite teams with distinct statistical patterns
+# These teams show statistically significant deviations from league average
+
+elite_teams:
+  - name: "Manchester City"
+    adjustment: 1.15
+    notes: "Dominant possession, low xGA"
+
+  - name: "Liverpool"
+    adjustment: 1.12
+    notes: "High pressing, volatile xG"
+
+  - name: "Arsenal"
+    adjustment: 1.10
+    notes: "Strong home form"
+
+  - name: "Chelsea"
+    adjustment: 1.08
+    notes: "Variable but elite tier"
+
+# Update criteria (check at season start)
+update_policy:
+  min_position: 4  # Must finish top 4
+  seasons_required: 2  # In top 4 for 2+ seasons

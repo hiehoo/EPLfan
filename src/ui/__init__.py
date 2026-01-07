@@ -1,1 +1,1 @@
-"""User interface components."""
+"""EPL Bet Indicator UI module."""
