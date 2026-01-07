@@ -1,0 +1,50 @@
+{
+  "timestamp": "2026-01-07T09:35:43.714758",
+  "stages": {
+    "data_collection": {
+      "n_examples": 1084,
+      "status": "success"
+    },
+    "feature_preparation": {
+      "n_features": 14,
+      "ou_base_rate": 0.5802583025830258,
+      "btts_base_rate": 0.5691881918819188
+    },
+    "ou_training": {
+      "target": "ou_2_5",
+      "n_train": 867,
+      "n_val": 217,
+      "rf_accuracy": 0.5806451612903226
+    },
+    "btts_training": {
+      "target": "btts",
+      "n_train": 867,
+      "n_val": 217,
+      "rf_accuracy": 0.5714285714285714
+    },
+    "feature_importance": {
+      "ou_top_5": [
+        [
+          "elo_diff",
+          0.1470926377683127
+        ],
+        [
+          "shot_ratio",
+          0.13331619826045985
+        ],
+        [
+          "xg_diff",
+          0.12676343676687338
+        ],
+        [
+          "away_xg",
+          0.1215339620667961
+        ],
+        [
+          "home_xg",
+          0.11688750012256896
+        ]
+      ]
+    }
+  }
+}
