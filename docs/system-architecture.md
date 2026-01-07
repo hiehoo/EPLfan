@@ -1,7 +1,7 @@
 # System Architecture
 
-**Version:** 2.0 (Phase 5)
-**Status:** Fully implemented & tested - all 5 phases complete
+**Version:** 3.0 (ML Enhancement)
+**Status:** Fully implemented & tested - ML Enhancement complete
 **Updated:** January 7, 2026
 
 ## High-Level Overview
@@ -98,9 +98,9 @@ Data Parse Error ──> Log error, skip market, continue
 - Disk: Full responses (TTL 24 hours)
 - Purpose: Reduce API calls, enable offline dev
 
-### 3. Processing Layer (`src/models/`) - COMPLETE (876 LOC)
+### 3. Processing Layer (`src/models/`) - COMPLETE (1,900+ LOC)
 
-**Purpose:** Calculate probabilities and edges
+**Purpose:** Calculate probabilities, edges, and ML-enhanced predictions
 
 **Core Model: Modified Poisson Distribution (180 LOC)**
 
@@ -127,11 +127,18 @@ Output:
   - All with validation: sum to 1.0, bounds [0, 1]
 ```
 
-**Components (876 LOC total):**
+**Components (1,900+ LOC total):**
 - `PoissonMatrix` (180 LOC) - Distribution generation
 - `MarketProbabilities` (250 LOC) - Derive 1X2/OU/BTTS
 - `WeightEngine` (280 LOC) - Adaptive weight application
 - `EdgeDetector` (280 LOC) - Edge calculation & filtering
+- `BaseRateTracker` (150 LOC) - Historical outcome tracking
+- `FeatureBuilder` (180 LOC) - ML feature engineering (14 features)
+- `MLClassifier` (285 LOC) - Ensemble classifier (LGB/XGB/RF)
+- `TrainingDataCollector` (189 LOC) - Training data mining
+- `TrainingPipeline` (116 LOC) - End-to-end training orchestration
+- `ABTestTracker` (245 LOC) - Model comparison framework
+- `PerformanceLogger` (112 LOC) - Real-time metrics
 
 **Weight Application:**
 
@@ -164,10 +171,56 @@ def calculate_edge(our_prob: float, market_prob: float) -> float:
     return (our_prob - market_prob) / market_prob
 ```
 
+**True Edge Calculation (ML Enhancement):**
+
+```python
+def calculate_true_edge(model_prob: float, market_prob: float, base_rate: float) -> float:
+    """Account for base rate when calculating edge.
+    True edge = min(naive_edge, skill_component)
+    Prevents false confidence from high base rate outcomes.
+    """
+    naive_edge = model_prob - market_prob
+    skill_component = model_prob - max(base_rate, 1 - base_rate)
+    return min(naive_edge, skill_component) if naive_edge > 0 else naive_edge
+```
+
+**ML Classification Ensemble:**
+
+```
+MLClassifier Components:
+├── LightGBM (optional, requires lightgbm package)
+├── XGBoost (optional, requires xgboost package)
+└── RandomForest (always available via scikit-learn)
+
+Features (14-dimensional vector):
+├── Home xG, xGA, shots, shots on target
+├── Away xG, xGA, shots, shots on target
+├── Home ELO, Away ELO, ELO diff
+├── Form indicators (recent results)
+└── Historical head-to-head (if available)
+
+Confidence Weighting:
+├── High confidence (>0.7): ML 60%, Poisson 40%
+├── Medium confidence (0.5-0.7): ML 40%, Poisson 60%
+└── Low confidence (<0.5): ML 20%, Poisson 80%
+```
+
+**Hybrid Edge Detection:**
+
+```
+HybridEdgeDetector (extends EdgeDetector):
+├── Blends Poisson + ML predictions
+├── Confidence-based weighting
+├── Agreement score tracking (0-1)
+├── Graceful degradation if ML unavailable
+└── Returns HybridEdgeSignal with full provenance
+```
+
 **Validation:**
 - All probabilities in [0, 1]
 - Weights sum to exactly 1.0
 - Edge thresholds by market type
+- True edge accounts for base rates
 
 ### 4. Storage Layer (`src/storage/`) - Phase 3
 
@@ -234,9 +287,9 @@ edges = db.alerts.query(
 - PostgreSQL option for production (Phase 4+)
 - Backup daily to S3 (future)
 
-### 5. UI Layer (`src/ui/`) - COMPLETE (1,155 LOC)
+### 5. UI Layer (`src/ui/`) - COMPLETE (1,400+ LOC)
 
-**Streamlit Dashboard (1,155 LOC total):**
+**Streamlit Dashboard (1,400+ LOC total):**
 ```
 Main Router: multipage Streamlit app
 
@@ -244,15 +297,20 @@ Pages (4):
 ├── Live Signals - Active alerts with edge breakdown
 │   ├── Real-time active alerts table
 │   ├── Edge badge (green >7%, yellow 5-7%, red <5%)
+│   ├── Model source indicator (🔀 Hybrid / 🤖 ML / 📊 Poisson)
 │   ├── Market data: bid/ask/implied odds
 │   └── 15-min auto-refresh
 │
-├── Match Analysis - Detailed probability breakdown
-│   ├── Select match from dropdown
-│   ├── Poisson distribution chart (0-10 goals)
-│   ├── 1X2 / OU / BTTS probability breakdowns
-│   ├── Weight profile display (current + all 3)
-│   └── Edge timeline (6h to kickoff)
+├── Match Analysis - Detailed probability breakdown (5 tabs)
+│   ├── 1X2 tab: Match result probabilities
+│   ├── Over/Under tab: Goal line analysis
+│   ├── BTTS tab: Both teams to score
+│   ├── Poisson Matrix tab: Scoreline probabilities
+│   └── ML Insights tab (NEW):
+│       ├── Poisson vs ML vs Hybrid comparison
+│       ├── Model confidence levels
+│       ├── Agreement score indicator
+│       └── Feature importance (if available)
 │
 ├── Historical - Edge tracking & performance
 │   ├── 7-day edge history (line chart by market)
@@ -268,7 +326,8 @@ Pages (4):
 
 Components:
 ├── EdgeBadge - Color-coded indicator with tooltip
-└── ProbabilityBar - Visual scale 0-100%
+├── ProbabilityBar - Visual scale 0-100%
+└── ModelSourceIndicator - ML/Poisson/Hybrid badge
 ```
 
 **Alerts System (362 LOC, Phase 5):**
