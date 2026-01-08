@@ -7,11 +7,33 @@ from src.storage.database import db
 from src.storage.models import Match, Prediction
 
 
+# Edge color constants for fintech theme
+EDGE_COLORS = {
+    "strong": {"hex": "#10B981", "class": "edge-strong", "label": "Strong"},
+    "moderate": {"hex": "#F59E0B", "class": "edge-moderate", "label": "Moderate"},
+    "marginal": {"hex": "#FB923C", "class": "edge-marginal", "label": "Marginal"},
+    "below": {"hex": "#64748B", "class": "edge-below", "label": "Below"},
+}
+
+
+def _get_edge_tier(edge: float) -> dict:
+    """Get edge tier info based on value."""
+    if edge >= 0.10:
+        return EDGE_COLORS["strong"]
+    elif edge >= 0.07:
+        return EDGE_COLORS["moderate"]
+    elif edge >= 0.05:
+        return EDGE_COLORS["marginal"]
+    return EDGE_COLORS["below"]
+
+
 def render():
     """Render live signals page."""
     st.header("Live Signals")
+    st.caption("Real-time edge detection across EPL markets")
 
-    # Filters
+    # Filters in styled container
+    st.markdown("#### Filters")
     col1, col2, col3 = st.columns(3)
     with col1:
         market_filter = st.selectbox(
@@ -26,14 +48,40 @@ def render():
             ["Next 24h", "Next 48h", "Next 7 days"],
         )
 
+    st.divider()
+
     # Fetch and display signals
     signals = _get_signals(market_filter, min_edge / 100, time_range)
 
     if not signals:
-        st.info("No signals matching criteria")
+        st.info("No signals matching your criteria. Try adjusting filters or check back later.")
         return
 
+    # Summary metrics
+    _render_summary_metrics(signals)
+
+    st.markdown("#### Active Signals")
     _render_signal_cards(signals)
+
+
+def _render_summary_metrics(signals: list):
+    """Render summary metrics for signals."""
+    total = len(signals)
+    strong = sum(1 for s in signals if s["edge"] >= 0.10)
+    moderate = sum(1 for s in signals if 0.07 <= s["edge"] < 0.10)
+    avg_edge = sum(s["edge"] for s in signals) / total if total > 0 else 0
+
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Total Signals", total)
+    with col2:
+        st.metric("Strong Edges", strong, help="Edge >= 10%")
+    with col3:
+        st.metric("Moderate Edges", moderate, help="Edge 7-10%")
+    with col4:
+        st.metric("Avg Edge", f"{avg_edge * 100:.1f}%")
+
+    st.divider()
 
 
 def _get_signals(market_filter: str, min_edge: float, time_range: str) -> list:
@@ -133,57 +181,103 @@ def _render_signal_cards(signals: list):
     """Render signal cards with edge visualization."""
     for signal in signals:
         match = signal["match"]
+        edge_tier = _get_edge_tier(signal["edge"])
 
-        # Color coding based on edge strength
-        if signal["edge"] >= 0.10:
-            edge_color = "🟢"  # Strong
-        elif signal["edge"] >= 0.07:
-            edge_color = "🟡"  # Moderate
-        else:
-            edge_color = "🟠"  # Marginal
+        # Create styled signal card with HTML
+        card_html = f"""
+        <div class="signal-card {edge_tier['class']}" style="
+            background: linear-gradient(145deg, #1E293B 0%, #0F172A 100%);
+            border: 1px solid #334155;
+            border-left: 4px solid {edge_tier['hex']};
+            border-radius: 12px;
+            padding: 1.25rem;
+            margin-bottom: 1rem;
+        ">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
+                <div style="font-family: 'Poppins', sans-serif; font-size: 1.1rem; font-weight: 600; color: #F8FAFC;">
+                    {match.home_team} vs {match.away_team}
+                </div>
+                <div style="
+                    background: {edge_tier['hex']}20;
+                    color: {edge_tier['hex']};
+                    padding: 0.25rem 0.75rem;
+                    border-radius: 20px;
+                    font-size: 0.75rem;
+                    font-weight: 600;
+                    text-transform: uppercase;
+                ">{edge_tier['label']} Edge</div>
+            </div>
+        </div>
+        """
+        st.markdown(card_html, unsafe_allow_html=True)
 
-        with st.container():
-            st.markdown(f"### {edge_color} {match.home_team} vs {match.away_team}")
+        # Metrics row
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("Market", signal["market"])
+        with col2:
+            st.metric("Selection", signal["selection"])
+        with col3:
+            # Color-coded edge value
+            edge_pct = signal['edge'] * 100
+            st.metric("Edge", f"{edge_pct:.1f}%")
+        with col4:
+            st.metric("Fair Price", f"{signal['fair_prob'] * 100:.1f}%")
 
-            col1, col2, col3, col4 = st.columns(4)
-            with col1:
-                st.metric("Market", signal["market"])
-            with col2:
-                st.metric("Selection", signal["selection"])
-            with col3:
-                st.metric("Edge", f"{signal['edge'] * 100:.1f}%")
-            with col4:
-                st.metric("Fair Price", f"{signal['fair_prob'] * 100:.1f}%")
+        # Model source indicator
+        model_source = signal.get("model_source", "poisson")
+        ml_confidence = signal.get("ml_confidence")
+        _render_model_source(model_source, ml_confidence)
 
-            # Model source indicator
-            model_source = signal.get("model_source", "poisson")
-            ml_confidence = signal.get("ml_confidence")
-            _render_model_source(model_source, ml_confidence)
+        # Details expander
+        with st.expander("View Details"):
+            kickoff_str = match.kickoff.strftime("%Y-%m-%d %H:%M UTC") if match.kickoff else "N/A"
 
-            # Details expander
-            with st.expander("Details"):
-                kickoff_str = match.kickoff.strftime("%Y-%m-%d %H:%M") if match.kickoff else "N/A"
-                st.write(f"**Kickoff:** {kickoff_str}")
-                st.write(f"**Polymarket:** {signal['market_prob'] * 100:.1f}%")
-                st.write(f"**Weight Profile:** {signal['preset']}")
+            detail_col1, detail_col2 = st.columns(2)
+            with detail_col1:
+                st.markdown("**Match Info**")
+                st.write(f"Kickoff: {kickoff_str}")
+                st.write(f"Weight Profile: {signal['preset']}")
+            with detail_col2:
+                st.markdown("**Probability Comparison**")
+                st.write(f"Model: {signal['fair_prob'] * 100:.1f}%")
+                st.write(f"Market: {signal['market_prob'] * 100:.1f}%")
 
-                # Show hybrid details if available
-                if signal.get("poisson_prob") and signal.get("ml_prob"):
-                    st.write("---")
-                    st.write(f"**Poisson:** {signal['poisson_prob'] * 100:.1f}%")
-                    st.write(f"**ML:** {signal['ml_prob'] * 100:.1f}%")
+            # Show hybrid details if available
+            if signal.get("poisson_prob") and signal.get("ml_prob"):
+                st.divider()
+                st.markdown("**Model Breakdown**")
+                hybrid_col1, hybrid_col2, hybrid_col3 = st.columns(3)
+                with hybrid_col1:
+                    st.write(f"Poisson: {signal['poisson_prob'] * 100:.1f}%")
+                with hybrid_col2:
+                    st.write(f"ML: {signal['ml_prob'] * 100:.1f}%")
+                with hybrid_col3:
                     agreement = signal.get("agreement_score", 1.0)
-                    st.write(f"**Agreement:** {agreement * 100:.0f}%")
+                    st.write(f"Agreement: {agreement * 100:.0f}%")
 
-            st.divider()
+        st.markdown("<div style='margin-bottom: 1.5rem;'></div>", unsafe_allow_html=True)
 
 
 def _render_model_source(model_source: str, ml_confidence: Optional[str] = None):
-    """Render model source indicator."""
+    """Render model source indicator with styled badge."""
     if model_source == "hybrid":
         conf_display = f" ({ml_confidence})" if ml_confidence else ""
-        st.caption(f"🔀 Hybrid Model{conf_display}")
+        badge_html = f"""
+        <div style="display: inline-block; background: #8B5CF620; color: #8B5CF6; padding: 0.2rem 0.6rem; border-radius: 4px; font-size: 0.75rem; margin-top: 0.5rem;">
+            Hybrid Model{conf_display}
+        </div>
+        """
     elif model_source == "ml":
-        st.caption("🤖 ML Classifier")
+        badge_html = """
+        <div style="display: inline-block; background: #06B6D420; color: #06B6D4; padding: 0.2rem 0.6rem; border-radius: 4px; font-size: 0.75rem; margin-top: 0.5rem;">
+            ML Classifier
+        </div>
+        """
     else:
-        st.caption("📊 Poisson Model")
+        badge_html = """
+        <div style="display: inline-block; background: #64748B20; color: #94A3B8; padding: 0.2rem 0.6rem; border-radius: 4px; font-size: 0.75rem; margin-top: 0.5rem;">
+            Poisson Model
+        </div>
+        """
+    st.markdown(badge_html, unsafe_allow_html=True)
