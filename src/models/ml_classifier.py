@@ -48,7 +48,7 @@ class MLClassifier:
 
     MODEL_DIR = Path("data/models")
 
-    def __init__(self):
+    def __init__(self, target: str = "ou_2_5"):
         self.MODEL_DIR.mkdir(parents=True, exist_ok=True)
 
         # Initialize models
@@ -58,7 +58,7 @@ class MLClassifier:
         # Track if trained
         self.is_trained = False
         self.trained_models = {}
-        self.target = "ou_2_5"
+        self.target = target
 
     def _init_models(self):
         """Initialize ensemble models."""
@@ -247,8 +247,9 @@ class MLClassifier:
             }, f)
         logger.info(f"Saved models to {filepath}")
 
-    def _load_models(self, target: str = "ou_2_5") -> bool:
+    def _load_models(self, target: str = None) -> bool:
         """Load trained models from disk."""
+        target = target or self.target
         filepath = self.MODEL_DIR / f"classifier_{target}.pkl"
         if filepath.exists():
             with open(filepath, "rb") as f:
@@ -294,5 +295,5 @@ class MLClassifier:
 
 
 # Singletons for each market
-ml_classifier_ou = MLClassifier()
-ml_classifier_btts = MLClassifier()
+ml_classifier_ou = MLClassifier(target="ou_2_5")
+ml_classifier_btts = MLClassifier(target="btts")

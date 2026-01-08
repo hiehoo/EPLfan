@@ -130,7 +130,10 @@ def _analyze_match(match_id: int) -> Optional[tuple]:
         if not home_stats or not away_stats:
             return None
 
-        # Run analysis
+        # Check if ML features available
+        is_elite = getattr(home_stats, 'is_elite', False) or getattr(away_stats, 'is_elite', False)
+
+        # Run analysis with ML features if available
         try:
             return match_analyzer.analyze(
                 match_id=str(match_id),
@@ -157,6 +160,14 @@ def _analyze_match(match_id: int) -> Optional[tuple]:
                 pm_under_2_5_price=odds.pm_under_2_5_price,
                 pm_btts_yes_price=odds.pm_btts_yes_price,
                 pm_btts_no_price=odds.pm_btts_no_price,
+                # ML feature stats
+                home_shots_pg=getattr(home_stats, 'shots_per_game', None),
+                away_shots_pg=getattr(away_stats, 'shots_per_game', None),
+                home_volatility=getattr(home_stats, 'goal_volatility', None),
+                away_volatility=getattr(away_stats, 'goal_volatility', None),
+                home_conversion=getattr(home_stats, 'shot_conversion_rate', None),
+                away_conversion=getattr(away_stats, 'shot_conversion_rate', None),
+                is_elite_match=is_elite,
             )
         except Exception as e:
             st.error(f"Analysis error: {e}")

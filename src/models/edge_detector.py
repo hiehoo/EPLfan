@@ -342,6 +342,9 @@ class HybridEdgeDetector(EdgeDetector):
         if not self._ml_initialized:
             try:
                 from src.models.ml_classifier import ml_classifier_ou
+                # Trigger lazy loading if not already trained
+                if not ml_classifier_ou.is_trained:
+                    ml_classifier_ou._load_models()
                 self._ml_initialized = ml_classifier_ou.is_trained
             except ImportError:
                 self._ml_initialized = False
@@ -383,7 +386,7 @@ class HybridEdgeDetector(EdgeDetector):
         ml_ou = ml_classifier_ou.predict_proba(feature_array)
         ml_btts = ml_classifier_btts.predict_proba(feature_array)
 
-        # Enhance O/U signal with ML
+        # Enhance O/U signal with ML (create info signal if none exists)
         if base_analysis.signal_ou:
             enhanced_ou = self._enhance_with_ml(
                 base_signal=base_analysis.signal_ou,
@@ -393,8 +396,21 @@ class HybridEdgeDetector(EdgeDetector):
                 away_team=away_team,
             )
             base_analysis.signal_ou = enhanced_ou
+        else:
+            # Create informational ML signal even without actionable edge
+            ou_edges = base_analysis.all_edges.get("ou", {})
+            over_edge = ou_edges.get("over", {})
+            base_analysis.signal_ou = self._create_ml_info_signal(
+                market_type="ou",
+                outcome="over",
+                fair_prob=over_edge.get("fair", 0.5),
+                market_prob=over_edge.get("market", 0.5),
+                ml_result=ml_ou,
+                home_team=home_team,
+                away_team=away_team,
+            )
 
-        # Enhance BTTS signal with ML
+        # Enhance BTTS signal with ML (create info signal if none exists)
         if base_analysis.signal_btts:
             enhanced_btts = self._enhance_with_ml(
                 base_signal=base_analysis.signal_btts,
@@ -404,6 +420,19 @@ class HybridEdgeDetector(EdgeDetector):
                 away_team=away_team,
             )
             base_analysis.signal_btts = enhanced_btts
+        else:
+            # Create informational ML signal even without actionable edge
+            btts_edges = base_analysis.all_edges.get("btts", {})
+            yes_edge = btts_edges.get("yes", {})
+            base_analysis.signal_btts = self._create_ml_info_signal(
+                market_type="btts",
+                outcome="yes",
+                fair_prob=yes_edge.get("fair", 0.5),
+                market_prob=yes_edge.get("market", 0.5),
+                ml_result=ml_btts,
+                home_team=home_team,
+                away_team=away_team,
+            )
 
         # Re-evaluate best signal
         actionable = [
@@ -476,6 +505,54 @@ class HybridEdgeDetector(EdgeDetector):
             is_elite_match=is_elite,
             model_source=ModelSource.HYBRID,
             poisson_prob=base_signal.fair_prob,
+            ml_prob=ml_prob,
+            ml_confidence=ml_result.confidence,
+            agreement_score=agreement,
+        )
+
+    def _create_ml_info_signal(
+        self,
+        market_type: str,
+        outcome: str,
+        fair_prob: float,
+        market_prob: float,
+        ml_result,
+        home_team: str = "",
+        away_team: str = "",
+    ) -> HybridEdgeSignal:
+        """Create an informational signal with ML data (even without actionable edge)."""
+        # Get ML probability for the outcome
+        ml_prob = ml_result.probability if outcome in ("over", "yes") else (1 - ml_result.probability)
+
+        # Blend probabilities
+        ml_weight = {
+            "high": self.ML_WEIGHT_HIGH_CONFIDENCE,
+            "medium": self.ML_WEIGHT_MEDIUM_CONFIDENCE,
+            "low": self.ML_WEIGHT_LOW_CONFIDENCE,
+        }.get(ml_result.confidence, 0.2)
+
+        poisson_weight = 1 - ml_weight
+        hybrid_prob = poisson_weight * fair_prob + ml_weight * ml_prob
+
+        edge = hybrid_prob - market_prob
+        agreement = 1 - abs(fair_prob - ml_prob)
+
+        return HybridEdgeSignal(
+            market_type=market_type,
+            outcome=outcome,
+            fair_prob=hybrid_prob,
+            market_prob=market_prob,
+            edge=edge,
+            edge_pct=edge * 100,
+            direction=SignalDirection(outcome),
+            is_actionable=False,  # Informational only
+            threshold_used=0.05,
+            base_rate=0.5,
+            true_edge=edge,
+            skill_component=0.0,
+            is_elite_match=False,
+            model_source=ModelSource.HYBRID,
+            poisson_prob=fair_prob,
             ml_prob=ml_prob,
             ml_confidence=ml_result.confidence,
             agreement_score=agreement,
