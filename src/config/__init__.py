@@ -39,6 +39,15 @@ def load_streamlit_secrets():
                 fd = st.secrets["football_data"]
                 if fd.get("api_key"):
                     os.environ.setdefault("FOOTBALL_DATA_API_KEY", fd["api_key"])
+
+            # DomeAPI (Polymarket wrapper)
+            if "dome_api" in st.secrets:
+                dome = st.secrets["dome_api"]
+                if dome.get("api_key"):
+                    os.environ.setdefault("DOME_API_KEY", dome["api_key"])
+            # Also support flat key format: DOME_API_KEY = "xxx"
+            elif "DOME_API_KEY" in st.secrets:
+                os.environ.setdefault("DOME_API_KEY", st.secrets["DOME_API_KEY"])
     except Exception:
         pass  # Not running in Streamlit or no secrets configured
 
