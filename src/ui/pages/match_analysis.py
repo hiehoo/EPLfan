@@ -263,7 +263,7 @@ def _render_1x2_analysis(match_probs, weighted_probs, edge_analysis):
         yaxis_tickformat=".0%",
     )
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
     # Edge display
     col1, col2, col3 = st.columns(3)
@@ -366,7 +366,7 @@ def _render_poisson_matrix(match_probs):
     )
     fig.update_layout(title="Poisson Probability Matrix")
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
     # Most likely scorelines
     st.markdown("**Most Likely Scorelines:**")

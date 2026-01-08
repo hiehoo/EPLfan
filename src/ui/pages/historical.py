@@ -289,7 +289,7 @@ def _render_calibration_chart(df: pd.DataFrame):
         yaxis_tickformat=".0%",
     )
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
 
 def _render_edge_accuracy(df: pd.DataFrame):
@@ -329,4 +329,4 @@ def _render_edge_accuracy(df: pd.DataFrame):
     )
     fig.update_traces(textposition="outside")
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
