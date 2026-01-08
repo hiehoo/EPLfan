@@ -1,6 +1,10 @@
 """EPL Bet Indicator Dashboard."""
 import streamlit as st
 
+# Load Streamlit secrets into env vars BEFORE importing other modules
+from src.config import load_streamlit_secrets
+load_streamlit_secrets()
+
 from src.storage.database import db
 
 # Ensure database tables exist on startup

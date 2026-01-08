@@ -4,57 +4,71 @@ import os
 import sys
 from pathlib import Path
 
+_secrets_loaded = False
+
 
 def load_streamlit_secrets():
-    """Load Streamlit Cloud secrets into environment variables."""
+    """Load Streamlit Cloud secrets into environment variables.
+
+    Safe to call multiple times - will only load once.
+    """
+    global _secrets_loaded
+    if _secrets_loaded:
+        return
+    _secrets_loaded = True
+
     try:
+        # Defer streamlit import to avoid Python 3.13 import issues
         import streamlit as st
-        if hasattr(st, "secrets") and st.secrets:
-            # Betfair
-            if "betfair" in st.secrets:
-                bf = st.secrets["betfair"]
-                if bf.get("username"):
-                    os.environ.setdefault("BETFAIR_USERNAME", bf["username"])
-                if bf.get("password"):
-                    os.environ.setdefault("BETFAIR_PASSWORD", bf["password"])
-                if bf.get("app_key"):
-                    os.environ.setdefault("BETFAIR_APP_KEY", bf["app_key"])
+        if not hasattr(st, "secrets"):
+            return
+        secrets = st.secrets
+        if not secrets:
+            return
 
-            # Telegram
-            if "telegram" in st.secrets:
-                tg = st.secrets["telegram"]
-                if tg.get("bot_token"):
-                    os.environ.setdefault("TELEGRAM_BOT_TOKEN", tg["bot_token"])
-                if tg.get("chat_id"):
-                    os.environ.setdefault("TELEGRAM_CHAT_ID", tg["chat_id"])
+        # Betfair
+        if "betfair" in secrets:
+            bf = secrets["betfair"]
+            if bf.get("username"):
+                os.environ.setdefault("BETFAIR_USERNAME", bf["username"])
+            if bf.get("password"):
+                os.environ.setdefault("BETFAIR_PASSWORD", bf["password"])
+            if bf.get("app_key"):
+                os.environ.setdefault("BETFAIR_APP_KEY", bf["app_key"])
 
-            # Polymarket
-            if "polymarket" in st.secrets:
-                pm = st.secrets["polymarket"]
-                if pm.get("private_key"):
-                    os.environ.setdefault("POLYMARKET_PRIVATE_KEY", pm["private_key"])
+        # Telegram
+        if "telegram" in secrets:
+            tg = secrets["telegram"]
+            if tg.get("bot_token"):
+                os.environ.setdefault("TELEGRAM_BOT_TOKEN", tg["bot_token"])
+            if tg.get("chat_id"):
+                os.environ.setdefault("TELEGRAM_CHAT_ID", tg["chat_id"])
 
-            # Football Data
-            if "football_data" in st.secrets:
-                fd = st.secrets["football_data"]
-                if fd.get("api_key"):
-                    os.environ.setdefault("FOOTBALL_DATA_API_KEY", fd["api_key"])
+        # Polymarket
+        if "polymarket" in secrets:
+            pm = secrets["polymarket"]
+            if pm.get("private_key"):
+                os.environ.setdefault("POLYMARKET_PRIVATE_KEY", pm["private_key"])
 
-            # DomeAPI (Polymarket wrapper)
-            if "dome_api" in st.secrets:
-                dome = st.secrets["dome_api"]
-                if dome.get("api_key"):
-                    os.environ.setdefault("DOME_API_KEY", dome["api_key"])
-            # Also support flat key format: DOME_API_KEY = "xxx"
-            elif "DOME_API_KEY" in st.secrets:
-                os.environ.setdefault("DOME_API_KEY", st.secrets["DOME_API_KEY"])
-    except Exception:
+        # Football Data
+        if "football_data" in secrets:
+            fd = secrets["football_data"]
+            if fd.get("api_key"):
+                os.environ.setdefault("FOOTBALL_DATA_API_KEY", fd["api_key"])
+
+        # DomeAPI (Polymarket wrapper)
+        if "dome_api" in secrets:
+            dome = secrets["dome_api"]
+            if dome.get("api_key"):
+                os.environ.setdefault("DOME_API_KEY", dome["api_key"])
+        # Also support flat key format: DOME_API_KEY = "xxx"
+        elif "DOME_API_KEY" in secrets:
+            os.environ.setdefault("DOME_API_KEY", secrets["DOME_API_KEY"])
+    except (ImportError, KeyError, Exception):
         pass  # Not running in Streamlit or no secrets configured
 
 
-# Load secrets before importing settings
-load_streamlit_secrets()
-
+# Import settings first (without triggering streamlit import)
 from .settings import settings, load_weight_config, get_weight_profile
 
 
