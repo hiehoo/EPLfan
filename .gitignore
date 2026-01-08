@@ -107,8 +107,12 @@ dmypy.json
 
 # Data
 data/*.db
+!data/epl_indicator.db
 data/*.log
 *.log
+
+# Allow trained models for deployment
+!data/models/
 
 # Certificates (sensitive)
 certs/*.pem

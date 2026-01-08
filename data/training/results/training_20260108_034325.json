@@ -1,0 +1,21 @@
+{
+  "timestamp": "2026-01-08T03:43:15.631064",
+  "target": "all",
+  "status": "completed",
+  "n_train": 867,
+  "n_test": 217,
+  "targets": {
+    "ou": {
+      "status": "saved",
+      "old_accuracy": 0.5806,
+      "new_accuracy": 0.5714,
+      "improvement": -0.0092
+    },
+    "btts": {
+      "status": "saved",
+      "old_accuracy": 0.4654,
+      "new_accuracy": 0.5714,
+      "improvement": 0.106
+    }
+  }
+}
