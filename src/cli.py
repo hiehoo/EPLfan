@@ -433,6 +433,203 @@ def seed_fixtures(days: int, api_key: str):
         fetcher.close()
 
 
+@cli.command("backfill-predictions")
+@click.option("--batch-size", default=100, help="Batch size for processing")
+@click.option("--dry-run", is_flag=True, help="Show what would be done without saving")
+def backfill_predictions(batch_size: int, dry_run: bool):
+    """Generate predictions for completed matches missing predictions."""
+    from src.config import setup_logging
+    from src.storage.database import db
+    from src.storage.models import Match, OddsSnapshot, Prediction, TeamStats
+    from src.models import MatchAnalyzer
+    from datetime import datetime
+
+    setup_logging()
+
+    click.echo("Backfilling predictions for completed matches...")
+
+    # Create analyzer instance
+    analyzer = MatchAnalyzer(use_ml=True)
+
+    stats = {"processed": 0, "skipped_no_odds": 0, "skipped_no_stats": 0, "errors": 0}
+
+    with db.session() as session:
+        # Get completed matches without predictions
+        subq = session.query(Prediction.match_id).distinct()
+        matches = (
+            session.query(Match)
+            .filter(
+                Match.is_completed == True,
+                Match.home_goals.isnot(None),
+                Match.away_goals.isnot(None),
+                ~Match.id.in_(subq)
+            )
+            .order_by(Match.kickoff)
+            .all()
+        )
+
+        total = len(matches)
+        click.echo(f"Found {total} matches needing predictions")
+
+        if dry_run:
+            click.echo("[DRY RUN] Would process these matches:")
+            for m in matches[:10]:
+                click.echo(f"  - {m.home_team} vs {m.away_team} ({m.kickoff.date()})")
+            if total > 10:
+                click.echo(f"  ... and {total - 10} more")
+            return
+
+        # Process in batches
+        for i in range(0, total, batch_size):
+            batch = matches[i:i + batch_size]
+            click.echo(f"\nProcessing batch {i // batch_size + 1} ({i + 1}-{min(i + batch_size, total)} of {total})")
+
+            for match in batch:
+                try:
+                    result = _process_match_for_backfill(session, match, analyzer)
+                    if result == "success":
+                        stats["processed"] += 1
+                    elif result == "no_odds":
+                        stats["skipped_no_odds"] += 1
+                    elif result == "no_stats":
+                        stats["skipped_no_stats"] += 1
+                except Exception as e:
+                    stats["errors"] += 1
+                    click.echo(f"  Error processing {match.home_team} vs {match.away_team}: {e}")
+
+            # Commit batch
+            session.commit()
+            click.echo(f"  Committed. Processed: {stats['processed']}")
+
+    # Summary
+    click.echo("\n" + "=" * 50)
+    click.echo("BACKFILL COMPLETE")
+    click.echo("=" * 50)
+    click.echo(f"Processed: {stats['processed']}")
+    click.echo(f"Skipped (no odds): {stats['skipped_no_odds']}")
+    click.echo(f"Skipped (no stats): {stats['skipped_no_stats']}")
+    click.echo(f"Errors: {stats['errors']}")
+
+
+def _process_match_for_backfill(session, match, analyzer) -> str:
+    """Process a single match for backfill. Returns status string."""
+    from src.storage.models import OddsSnapshot, TeamStats, Prediction
+
+    # Get odds snapshot
+    odds = (
+        session.query(OddsSnapshot)
+        .filter_by(match_id=match.id)
+        .order_by(OddsSnapshot.snapshot_time.desc())
+        .first()
+    )
+    if not odds or not odds.bf_home_odds:
+        return "no_odds"
+
+    # Get team stats closest to match date
+    home_stats = (
+        session.query(TeamStats)
+        .filter(
+            TeamStats.team_name == match.home_team,
+            TeamStats.snapshot_date <= match.kickoff
+        )
+        .order_by(TeamStats.snapshot_date.desc())
+        .first()
+    )
+    away_stats = (
+        session.query(TeamStats)
+        .filter(
+            TeamStats.team_name == match.away_team,
+            TeamStats.snapshot_date <= match.kickoff
+        )
+        .order_by(TeamStats.snapshot_date.desc())
+        .first()
+    )
+
+    if not home_stats or not away_stats:
+        return "no_stats"
+
+    # Run analyzer with ML features
+    is_elite = getattr(home_stats, 'is_elite', False) or getattr(away_stats, 'is_elite', False)
+
+    match_probs, weighted_probs, edge_analysis = analyzer.analyze(
+        match_id=str(match.id),
+        home_team=match.home_team,
+        away_team=match.away_team,
+        kickoff=match.kickoff,
+        home_xg=home_stats.home_xg or 1.2,
+        away_xg=away_stats.away_xg or 1.2,
+        home_xga=home_stats.home_xga or 1.2,
+        away_xga=away_stats.away_xga or 1.2,
+        home_elo=home_stats.elo_rating or 1500,
+        away_elo=away_stats.elo_rating or 1500,
+        bf_home_odds=odds.bf_home_odds or 2.5,
+        bf_draw_odds=odds.bf_draw_odds or 3.5,
+        bf_away_odds=odds.bf_away_odds or 3.0,
+        bf_over_2_5_odds=odds.bf_over_2_5_odds,
+        bf_under_2_5_odds=odds.bf_under_2_5_odds,
+        bf_btts_yes_odds=odds.bf_btts_yes_odds,
+        bf_btts_no_odds=odds.bf_btts_no_odds,
+        pm_home_price=odds.pm_home_price,
+        pm_draw_price=odds.pm_draw_price,
+        pm_away_price=odds.pm_away_price,
+        pm_over_2_5_price=odds.pm_over_2_5_price,
+        pm_under_2_5_price=odds.pm_under_2_5_price,
+        pm_btts_yes_price=odds.pm_btts_yes_price,
+        pm_btts_no_price=odds.pm_btts_no_price,
+        # ML features
+        home_shots_pg=getattr(home_stats, 'shots_per_game', None),
+        away_shots_pg=getattr(away_stats, 'shots_per_game', None),
+        home_volatility=getattr(home_stats, 'goal_volatility', None),
+        away_volatility=getattr(away_stats, 'goal_volatility', None),
+        home_conversion=getattr(home_stats, 'shot_conversion_rate', None),
+        away_conversion=getattr(away_stats, 'shot_conversion_rate', None),
+        is_elite_match=is_elite,
+    )
+
+    # Extract signal outcomes
+    signal_1x2 = edge_analysis.signal_1x2.outcome if edge_analysis.signal_1x2 else "none"
+    signal_ou = edge_analysis.signal_ou.outcome if edge_analysis.signal_ou else "none"
+    signal_btts = edge_analysis.signal_btts.outcome if edge_analysis.signal_btts else "none"
+
+    # Calculate actual outcomes
+    h, a = match.home_goals, match.away_goals
+    actual_1x2 = "home" if h > a else ("away" if a > h else "draw")
+    actual_ou = "over" if (h + a) > 2.5 else "under"
+    actual_btts = "yes" if (h > 0 and a > 0) else "no"
+
+    # Create prediction using correct attribute names
+    prediction = Prediction(
+        match_id=match.id,
+        preset_used=weighted_probs.preset_name or "balanced",
+        # 1X2 - use fair_1x2 dict from WeightedProbabilities
+        p_home_model=weighted_probs.fair_1x2.get("home", 0.33),
+        p_draw_model=weighted_probs.fair_1x2.get("draw", 0.33),
+        p_away_model=weighted_probs.fair_1x2.get("away", 0.33),
+        p_home_market=match_probs.betfair_1x2.get("home", 0.33),
+        p_draw_market=match_probs.betfair_1x2.get("draw", 0.33),
+        p_away_market=match_probs.betfair_1x2.get("away", 0.33),
+        edge_1x2=edge_analysis.signal_1x2.edge if edge_analysis.signal_1x2 else 0,
+        signal_1x2=signal_1x2,
+        # O/U - use fair_ou dict
+        p_over_2_5_model=weighted_probs.fair_ou.get("2.5", {}).get("over", 0.5),
+        p_over_2_5_market=match_probs.betfair_ou.get("2.5", {}).get("over", 0.5),
+        edge_ou=edge_analysis.signal_ou.edge if edge_analysis.signal_ou else 0,
+        signal_ou=signal_ou,
+        # BTTS - use fair_btts dict
+        p_btts_yes_model=weighted_probs.fair_btts.get("yes", 0.5),
+        p_btts_yes_market=match_probs.betfair_btts.get("yes", 0.5),
+        edge_btts=edge_analysis.signal_btts.edge if edge_analysis.signal_btts else 0,
+        signal_btts=signal_btts,
+        # Outcome correctness
+        is_1x2_correct=(signal_1x2 == actual_1x2) if signal_1x2 != "none" else None,
+        is_ou_correct=(signal_ou == actual_ou) if signal_ou != "none" else None,
+        is_btts_correct=(signal_btts == actual_btts) if signal_btts != "none" else None,
+    )
+
+    session.add(prediction)
+    return "success"
+
+
 @cli.command()
 def status():
     """Show system status."""
