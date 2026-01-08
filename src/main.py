@@ -83,12 +83,18 @@ def _signal_handler(signum, frame):
 async def run_service():
     """Run the main service loop."""
     global _shutdown_event
+    import threading
 
     _shutdown_event = asyncio.Event()
 
-    # Setup signal handlers
-    for sig in (signal.SIGTERM, signal.SIGINT):
-        signal.signal(sig, _signal_handler)
+    # Setup signal handlers (only works in main thread)
+    if threading.current_thread() is threading.main_thread():
+        try:
+            for sig in (signal.SIGTERM, signal.SIGINT):
+                signal.signal(sig, _signal_handler)
+        except (ValueError, OSError) as e:
+            # Signal handlers can't be set in non-main threads or restricted environments
+            logger.warning(f"Could not set signal handlers: {e}")
 
     try:
         # Startup
