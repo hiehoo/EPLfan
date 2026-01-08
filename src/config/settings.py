@@ -54,6 +54,18 @@ class PolymarketSettings(BaseSettings):
         return bool(self.private_key.get_secret_value())
 
 
+class DomeApiSettings(BaseSettings):
+    """DomeAPI configuration (Polymarket wrapper)."""
+
+    model_config = SettingsConfigDict(env_prefix="DOME_API_")
+
+    api_key: SecretStr = SecretStr("")
+
+    def is_configured(self) -> bool:
+        """Check if DomeAPI key is configured."""
+        return bool(self.api_key.get_secret_value())
+
+
 class FootballDataSettings(BaseSettings):
     """Football-Data.org API configuration."""
 
@@ -99,6 +111,7 @@ class AppSettings(BaseSettings):
     betfair: BetfairSettings = Field(default_factory=BetfairSettings)
     telegram: TelegramSettings = Field(default_factory=TelegramSettings)
     polymarket: PolymarketSettings = Field(default_factory=PolymarketSettings)
+    dome_api: DomeApiSettings = Field(default_factory=DomeApiSettings)
     football_data: FootballDataSettings = Field(default_factory=FootballDataSettings)
     windows: WindowConfig = Field(default_factory=WindowConfig)
 

@@ -2,14 +2,16 @@
 import asyncio
 import logging
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Optional, Union
 
 from src.fetchers.betfair_fetcher import BetfairFetcher, BetfairOdds
 from src.fetchers.understat_fetcher import UnderstatFetcher, TeamXGData
 from src.fetchers.clubelo_fetcher import ClubELOFetcher, TeamELO
 from src.fetchers.polymarket_fetcher import PolymarketFetcher, PolymarketPrices
+from src.fetchers.dome_api_fetcher import DomeApiFetcher, DomeApiPrices
 from src.fetchers.historical_data_seeder import HistoricalDataSeeder, historical_seeder
 from src.fetchers.fixture_fetcher import FixtureFetcher, Fixture, fixture_fetcher
+from src.config.settings import settings
 from src.storage.database import db
 from src.storage.models import Match, OddsSnapshot, TeamStats
 
@@ -25,6 +27,8 @@ __all__ = [
     "TeamELO",
     "PolymarketFetcher",
     "PolymarketPrices",
+    "DomeApiFetcher",
+    "DomeApiPrices",
     "HistoricalDataSeeder",
     "historical_seeder",
     "FixtureFetcher",
@@ -41,6 +45,8 @@ class DataOrchestrator:
         self.understat = UnderstatFetcher()
         self.clubelo = ClubELOFetcher()
         self.polymarket = PolymarketFetcher()
+        # Prefer DomeAPI when configured (better rate limits and structure)
+        self.dome_api = DomeApiFetcher() if settings.dome_api.is_configured() else None
 
     async def fetch_all(self, hours_ahead: int = 48) -> dict:
         """Fetch all data sources concurrently.
@@ -59,7 +65,14 @@ class DataOrchestrator:
         ))
         understat_task = asyncio.create_task(self.understat.fetch_all_teams())
         elo_task = asyncio.create_task(self.clubelo.fetch_epl_ratings())
-        polymarket_task = asyncio.create_task(self.polymarket.fetch_epl_markets())
+
+        # Prefer DomeAPI for Polymarket data when configured
+        if self.dome_api and settings.dome_api.is_configured():
+            logger.info("Using DomeAPI for Polymarket data")
+            polymarket_task = asyncio.create_task(self.dome_api.fetch_epl_markets())
+        else:
+            logger.info("Using native Polymarket API")
+            polymarket_task = asyncio.create_task(self.polymarket.fetch_epl_markets())
 
         betfair_data, xg_data, elo_data, poly_data = await asyncio.gather(
             betfair_task, understat_task, elo_task, polymarket_task,
@@ -153,16 +166,17 @@ class DataOrchestrator:
                     pm_away_price=poly_match.away_win_price if poly_match else None,
                     pm_over_2_5_price=poly_match.over_2_5_price if poly_match else None,
                     pm_btts_yes_price=poly_match.btts_yes_price if poly_match else None,
-                    pm_home_liquidity=poly_match.home_win_liquidity if poly_match else None,
+                    # Handle both PolymarketPrices.home_win_liquidity and DomeApiPrices.liquidity
+                    pm_home_liquidity=getattr(poly_match, 'home_win_liquidity', None) or getattr(poly_match, 'liquidity', None) if poly_match else None,
                 )
                 session.add(snapshot)
 
     def _find_matching_poly(
         self,
         bf_odds: BetfairOdds,
-        poly_data: list[PolymarketPrices]
-    ) -> Optional[PolymarketPrices]:
-        """Find Polymarket data matching Betfair match."""
+        poly_data: list[Union[PolymarketPrices, DomeApiPrices]]
+    ) -> Optional[Union[PolymarketPrices, DomeApiPrices]]:
+        """Find Polymarket/DomeAPI data matching Betfair match."""
         for poly in poly_data:
             # Fuzzy match on team names
             bf_home_lower = bf_odds.home_team.lower()
@@ -179,3 +193,5 @@ class DataOrchestrator:
         """Clean up resources."""
         self.betfair.logout()
         await self.polymarket.close()
+        if self.dome_api:
+            await self.dome_api.close()
