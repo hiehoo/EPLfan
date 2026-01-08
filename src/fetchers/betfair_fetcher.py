@@ -57,12 +57,28 @@ class BetfairFetcher:
         )
         self._logged_in = False
 
-    def login(self) -> None:
-        """Login to Betfair API."""
-        if not self._logged_in:
+    def login(self) -> bool:
+        """Login to Betfair API.
+
+        Returns:
+            True if login successful, False otherwise
+        """
+        if self._logged_in:
+            return True
+
+        if not settings.betfair.is_configured():
+            logger.warning("Betfair credentials not configured")
+            return False
+
+        try:
             self.client.login()
             self._logged_in = True
             logger.info("Logged in to Betfair")
+            return True
+        except Exception as e:
+            logger.error(f"Betfair login failed: {e}")
+            self._logged_in = False
+            return False
 
     def logout(self) -> None:
         """Logout from Betfair API."""
@@ -127,7 +143,11 @@ class BetfairFetcher:
 
             for sel_id, runner in runners.items():
                 name = runner_names.get(sel_id, "").lower()
-                best_back = runner.ex.available_to_back[0].price if runner.ex.available_to_back else None
+                best_back = (
+                    runner.ex.available_to_back[0].price
+                    if runner.ex.available_to_back and len(runner.ex.available_to_back) > 0
+                    else None
+                )
 
                 if best_back:
                     if "draw" in name or name == "the draw":
@@ -187,7 +207,11 @@ class BetfairFetcher:
                 )
                 if ou_prices and ou_prices[0].runners:
                     for runner in ou_prices[0].runners:
-                        best_back = runner.ex.available_to_back[0].price if runner.ex.available_to_back else None
+                        best_back = (
+                            runner.ex.available_to_back[0].price
+                            if runner.ex.available_to_back and len(runner.ex.available_to_back) > 0
+                            else None
+                        )
                         if best_back:
                             # Determine if Over or Under based on selection name
                             runner_name = next(
@@ -216,7 +240,11 @@ class BetfairFetcher:
                 )
                 if btts_prices and btts_prices[0].runners:
                     for runner in btts_prices[0].runners:
-                        best_back = runner.ex.available_to_back[0].price if runner.ex.available_to_back else None
+                        best_back = (
+                            runner.ex.available_to_back[0].price
+                            if runner.ex.available_to_back and len(runner.ex.available_to_back) > 0
+                            else None
+                        )
                         if best_back:
                             runner_name = next(
                                 (r.runner_name for r in btts_markets[0].runners if r.selection_id == runner.selection_id),

@@ -65,7 +65,12 @@ class PoissonCalculator:
                 matrix[h, a] = p_home * p_away
 
         # Normalize (should sum to ~1, but ensure it)
-        matrix = matrix / matrix.sum()
+        total = matrix.sum()
+        if total > 0:
+            matrix = matrix / total
+        else:
+            # Fallback to uniform distribution if calculation fails
+            matrix = np.ones((self.MAX_GOALS, self.MAX_GOALS)) / (self.MAX_GOALS ** 2)
 
         return matrix
 
@@ -135,6 +140,9 @@ class PoissonCalculator:
             List of (home_goals, away_goals, probability) tuples
         """
         scores = []
+        if matrix.shape != (self.MAX_GOALS, self.MAX_GOALS):
+            return []
+
         for h in range(self.MAX_GOALS):
             for a in range(self.MAX_GOALS):
                 scores.append((h, a, matrix[h, a]))

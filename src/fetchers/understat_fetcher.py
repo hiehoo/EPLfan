@@ -1,4 +1,5 @@
 """Fetch xG data from Understat for EPL teams."""
+import asyncio
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -64,26 +65,47 @@ class UnderstatFetcher:
 
     async def fetch_all_teams(self) -> dict[str, TeamXGData]:
         """Fetch xG data for all EPL teams."""
-        async with self.client as client:
-            # Get team season data
-            teams = await client.get_teams(self.LEAGUE, self.season)
+        try:
+            async with self.client as client:
+                # Get team season data with timeout
+                try:
+                    teams = await asyncio.wait_for(
+                        client.get_teams(self.LEAGUE, self.season),
+                        timeout=30.0
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning("Understat API timeout fetching teams")
+                    return {}
 
-            results = {}
-            for team in teams:
-                team_data = await self._process_team(client, team)
-                if team_data:
-                    results[team_data.team_name] = team_data
+                results = {}
+                for team in teams:
+                    team_data = await self._process_team(client, team)
+                    if team_data:
+                        results[team_data.team_name] = team_data
 
-            logger.info(f"Fetched xG data for {len(results)} teams")
-            return results
+                logger.info(f"Fetched xG data for {len(results)} teams")
+                return results
+        except Exception as e:
+            logger.error(f"Error fetching Understat data: {e}")
+            return {}
 
     async def _process_team(self, client, team_summary) -> Optional[TeamXGData]:
         """Process single team's xG data with enhanced metrics."""
         try:
-            team_name = team_summary["title"]
+            team_name = team_summary.get("title", "Unknown")
 
-            # Get detailed match-by-match data
-            matches = await client.get_team_results(team_name, self.season)
+            # Get detailed match-by-match data with timeout
+            try:
+                matches = await asyncio.wait_for(
+                    client.get_team_results(team_name, self.season),
+                    timeout=30.0
+                )
+            except asyncio.TimeoutError:
+                logger.warning(f"Timeout fetching results for {team_name}")
+                return None
+            except Exception as e:
+                logger.error(f"Error fetching results for {team_name}: {e}")
+                return None
 
             if not matches:
                 return None
@@ -104,42 +126,44 @@ class UnderstatFetcher:
             goals_against = []
 
             for m in recent_matches:
-                is_home = m["h"]["title"] == team_name
+                is_home = m.get("h", {}).get("title") == team_name
                 if is_home:
-                    xg_for_list.append(float(m["xG"]["h"]))
-                    xga_against_list.append(float(m["xG"]["a"]))
-                    goals_scored.append(int(m["goals"]["h"]))
-                    goals_against.append(int(m["goals"]["a"]))
+                    xg_for_list.append(float(m.get("xG", {}).get("h", 0.0)))
+                    xga_against_list.append(float(m.get("xG", {}).get("a", 0.0)))
+                    goals_scored.append(int(m.get("goals", {}).get("h", 0)))
+                    goals_against.append(int(m.get("goals", {}).get("a", 0)))
                 else:
-                    xg_for_list.append(float(m["xG"]["a"]))
-                    xga_against_list.append(float(m["xG"]["h"]))
-                    goals_scored.append(int(m["goals"]["a"]))
-                    goals_against.append(int(m["goals"]["h"]))
+                    xg_for_list.append(float(m.get("xG", {}).get("a", 0.0)))
+                    xga_against_list.append(float(m.get("xG", {}).get("h", 0.0)))
+                    goals_scored.append(int(m.get("goals", {}).get("a", 0)))
+                    goals_against.append(int(m.get("goals", {}).get("h", 0)))
 
                 # Calculate xPTS from xG
+                xg_h = float(m.get("xG", {}).get("h", 0.0))
+                xg_a = float(m.get("xG", {}).get("a", 0.0))
                 xpts_list.append(self._xg_to_xpts(
-                    float(m["xG"]["h"]) if is_home else float(m["xG"]["a"]),
-                    float(m["xG"]["a"]) if is_home else float(m["xG"]["h"]),
+                    xg_h if is_home else xg_a,
+                    xg_a if is_home else xg_h,
                     is_home,
                 ))
 
             # Home/Away specific
-            home_xg = sum(float(m["xG"]["h"]) for m in home_matches) / max(len(home_matches), 1)
-            home_xga = sum(float(m["xG"]["a"]) for m in home_matches) / max(len(home_matches), 1)
-            away_xg = sum(float(m["xG"]["a"]) for m in away_matches) / max(len(away_matches), 1)
-            away_xga = sum(float(m["xG"]["h"]) for m in away_matches) / max(len(away_matches), 1)
+            home_xg = sum(float(m.get("xG", {}).get("h", 0.0)) for m in home_matches) / max(len(home_matches), 1)
+            home_xga = sum(float(m.get("xG", {}).get("a", 0.0)) for m in home_matches) / max(len(home_matches), 1)
+            away_xg = sum(float(m.get("xG", {}).get("a", 0.0)) for m in away_matches) / max(len(away_matches), 1)
+            away_xga = sum(float(m.get("xG", {}).get("h", 0.0)) for m in away_matches) / max(len(away_matches), 1)
 
             # Form data (last 5)
             form_xg = []
             form_xga = []
             for m in form_matches:
-                is_home = m["h"]["title"] == team_name
+                is_home = m.get("h", {}).get("title") == team_name
                 if is_home:
-                    form_xg.append(float(m["xG"]["h"]))
-                    form_xga.append(float(m["xG"]["a"]))
+                    form_xg.append(float(m.get("xG", {}).get("h", 0.0)))
+                    form_xga.append(float(m.get("xG", {}).get("a", 0.0)))
                 else:
-                    form_xg.append(float(m["xG"]["a"]))
-                    form_xga.append(float(m["xG"]["h"]))
+                    form_xg.append(float(m.get("xG", {}).get("a", 0.0)))
+                    form_xga.append(float(m.get("xG", {}).get("h", 0.0)))
 
             # NEW: Shot data extraction (Understat provides in team summary)
             shots_for = float(team_summary.get("scored", 0)) if team_summary.get("scored") else 0
@@ -150,8 +174,15 @@ class UnderstatFetcher:
             # Note: Understat API doesn't always provide direct shot counts in results
             # Using goals as proxy with league-average conversion rate
             avg_conversion = 0.10  # EPL average ~10% shot conversion
-            shots_per_game = (sum(goals_scored) / matches_count) / avg_conversion if goals_scored else 12.0
-            shots_against_per_game = (sum(goals_against) / matches_count) / avg_conversion if goals_against else 12.0
+            if goals_scored and matches_count > 0 and avg_conversion > 0:
+                shots_per_game = (sum(goals_scored) / matches_count) / avg_conversion
+            else:
+                shots_per_game = 12.0
+
+            if goals_against and matches_count > 0 and avg_conversion > 0:
+                shots_against_per_game = (sum(goals_against) / matches_count) / avg_conversion
+            else:
+                shots_against_per_game = 12.0
 
             # NEW: Volatility (std dev)
             goal_volatility = float(np.std(goals_scored)) if len(goals_scored) > 1 else 0.0
@@ -161,7 +192,8 @@ class UnderstatFetcher:
             # NEW: Conversion rate and xG overperformance
             total_goals = sum(goals_scored)
             total_xg = sum(xg_for_list)
-            shot_conversion = total_goals / (shots_per_game * matches_count) if shots_per_game > 0 else 0.10
+            denominator = shots_per_game * matches_count
+            shot_conversion = total_goals / denominator if denominator > 0 else 0.10
             xg_overperformance = (total_goals - total_xg) / matches_count if matches_count > 0 else 0.0
 
             return TeamXGData(

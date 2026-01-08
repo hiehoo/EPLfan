@@ -109,6 +109,12 @@ class FeatureBuilder:
     def __init__(self):
         self.window_config = load_window_config()
 
+    def _clamp_xg(self, value: float, min_val: float = 0.1, max_val: float = 5.0) -> float:
+        """Clamp xG value to valid range."""
+        if value is None:
+            return 1.0  # Default neutral xG
+        return max(min_val, min(value, max_val))
+
     def build_match_features(
         self,
         match_id: str,
@@ -127,7 +133,8 @@ class FeatureBuilder:
         # Shot features
         shot_ratio = (
             home_stats.shots_per_game / away_stats.shots_per_game
-            if away_stats.shots_per_game > 0 else 1.0
+            if away_stats.shots_per_game > 0 and home_stats.shots_per_game >= 0
+            else 1.0
         )
 
         # xG diff (attacking potential)
@@ -141,11 +148,13 @@ class FeatureBuilder:
         # Form trend (simplified: compare recent to season avg)
         home_form_xg = (
             sum(home_stats.form_xg) / len(home_stats.form_xg)
-            if home_stats.form_xg else home_stats.xg_for
+            if home_stats.form_xg and len(home_stats.form_xg) > 0
+            else home_stats.xg_for
         )
         away_form_xg = (
             sum(away_stats.form_xg) / len(away_stats.form_xg)
-            if away_stats.form_xg else away_stats.xg_for
+            if away_stats.form_xg and len(away_stats.form_xg) > 0
+            else away_stats.xg_for
         )
 
         # Form trend: positive = improving

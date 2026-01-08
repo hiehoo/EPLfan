@@ -3,7 +3,7 @@ import streamlit as st
 import plotly.graph_objects as go
 import plotly.express as px
 import pandas as pd
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, time
 from typing import Optional
 
 from src.storage.database import db
@@ -50,6 +50,10 @@ def render():
 
 def _get_historical_predictions(start_date, end_date) -> pd.DataFrame:
     """Fetch resolved predictions."""
+    # Make datetime timezone-aware (UTC)
+    start_dt = datetime.combine(start_date, time.min).replace(tzinfo=timezone.utc)
+    end_dt = datetime.combine(end_date, time.max).replace(tzinfo=timezone.utc)
+
     with db.session() as session:
         results = (
             session.query(
@@ -77,8 +81,8 @@ def _get_historical_predictions(start_date, end_date) -> pd.DataFrame:
             )
             .join(Match)
             .filter(
-                Match.kickoff >= datetime.combine(start_date, datetime.min.time()),
-                Match.kickoff <= datetime.combine(end_date, datetime.max.time()),
+                Match.kickoff >= start_dt,
+                Match.kickoff <= end_dt,
                 Match.is_completed == True,
             )
             .all()
@@ -199,6 +203,10 @@ def _render_summary_metrics(df: pd.DataFrame):
 
 def _render_market_performance(df: pd.DataFrame):
     """Render performance breakdown by market."""
+    if df.empty:
+        st.info("No data available for market performance analysis")
+        return
+
     market_stats = (
         df.groupby("market_type")
         .agg({
@@ -223,6 +231,10 @@ def _render_market_performance(df: pd.DataFrame):
 
 def _render_calibration_chart(df: pd.DataFrame):
     """Render calibration chart - predicted vs actual."""
+    if df.empty:
+        st.info("No data available for calibration analysis")
+        return
+
     # Bin predictions by probability
     df_cal = df.copy()
     df_cal["prob_bin"] = pd.cut(
@@ -239,6 +251,11 @@ def _render_calibration_chart(df: pd.DataFrame):
         })
         .reset_index()
     )
+
+    # Check sample size per bin
+    bin_counts = df_cal.groupby("prob_bin", observed=True).size()
+    if len(bin_counts) > 0 and bin_counts.max() < 5:
+        st.warning("⚠️ Low sample size per bin (<5). Calibration results may be unreliable.")
 
     fig = go.Figure()
 
@@ -277,6 +294,10 @@ def _render_calibration_chart(df: pd.DataFrame):
 
 def _render_edge_accuracy(df: pd.DataFrame):
     """Render edge vs accuracy scatter."""
+    if df.empty:
+        st.info("No data available for edge accuracy analysis")
+        return
+
     # Group by edge buckets
     df_edge = df.copy()
     df_edge["edge_bucket"] = pd.cut(

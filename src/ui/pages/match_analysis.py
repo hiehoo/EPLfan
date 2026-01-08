@@ -23,14 +23,14 @@ def render():
         return
 
     match_options = {
-        f"{m.home_team} vs {m.away_team} ({m.kickoff.strftime('%d/%m %H:%M')})": m
+        f"{m['home_team']} vs {m['away_team']} ({m['kickoff'].strftime('%d/%m %H:%M')})": m
         for m in matches
     }
     selected = st.selectbox("Select Match", list(match_options.keys()))
     match = match_options[selected]
 
     # Get data and analyze
-    analysis_result = _analyze_match(match)
+    analysis_result = _analyze_match(match["id"])
 
     if not analysis_result:
         st.error("Failed to analyze match - missing data")
@@ -57,26 +57,55 @@ def render():
         _render_ml_insights(edge_analysis)
 
 
-def _get_upcoming_matches() -> list:
-    """Fetch upcoming matches."""
+def _get_upcoming_matches() -> list[dict]:
+    """Fetch upcoming matches as dictionaries to avoid session detachment."""
     with db.session() as session:
         now = datetime.now(timezone.utc)
-        return (
+        matches = (
             session.query(Match)
             .filter(Match.kickoff >= now, Match.is_completed == False)
             .order_by(Match.kickoff)
             .limit(20)
             .all()
         )
+        # Convert to dicts to avoid DetachedInstanceError
+        return [
+            {
+                "id": m.id,
+                "external_id": m.external_id,
+                "home_team": m.home_team,
+                "away_team": m.away_team,
+                "kickoff": m.kickoff,
+            }
+            for m in matches
+        ]
 
 
-def _analyze_match(match: Match) -> Optional[tuple]:
-    """Run full analysis on a match."""
+def _validate_xg(value, default: float = 1.0) -> float:
+    """Validate xG is in reasonable range."""
+    if value is not None and 0 < value < 10:
+        return value
+    return default
+
+def _validate_elo(value, default: float = 1500.0) -> float:
+    """Validate ELO is in reasonable range."""
+    if value is not None and 1000 < value < 3000:
+        return value
+    return default
+
+
+def _analyze_match(match_id: int) -> Optional[tuple]:
+    """Run full analysis on a match by ID."""
     with db.session() as session:
+        # Get match
+        match = session.query(Match).filter_by(id=match_id).first()
+        if not match:
+            return None
+
         # Get latest odds snapshot
         odds = (
             session.query(OddsSnapshot)
-            .filter(OddsSnapshot.match_id == match.id)
+            .filter(OddsSnapshot.match_id == match_id)
             .order_by(OddsSnapshot.snapshot_time.desc())
             .first()
         )
@@ -104,16 +133,16 @@ def _analyze_match(match: Match) -> Optional[tuple]:
         # Run analysis
         try:
             return match_analyzer.analyze(
-                match_id=str(match.id),
+                match_id=str(match_id),
                 home_team=match.home_team,
                 away_team=match.away_team,
                 kickoff=match.kickoff,
-                home_xg=home_stats.home_xg,
-                away_xg=away_stats.away_xg,
-                home_xga=home_stats.home_xga,
-                away_xga=away_stats.away_xga,
-                home_elo=home_stats.elo_rating,
-                away_elo=away_stats.elo_rating,
+                home_xg=_validate_xg(home_stats.home_xg),
+                away_xg=_validate_xg(away_stats.away_xg),
+                home_xga=_validate_xg(home_stats.home_xga),
+                away_xga=_validate_xg(away_stats.away_xga),
+                home_elo=_validate_elo(home_stats.elo_rating),
+                away_elo=_validate_elo(away_stats.elo_rating),
                 bf_home_odds=odds.bf_home_odds or 2.5,
                 bf_draw_odds=odds.bf_draw_odds or 3.5,
                 bf_away_odds=odds.bf_away_odds or 3.0,
@@ -311,7 +340,7 @@ def _render_poisson_matrix(match_probs):
     """Render Poisson probability matrix."""
     st.subheader("Scoreline Probabilities")
 
-    matrix = match_probs.poisson_result.score_matrix
+    matrix = match_probs.poisson_result.matrix
 
     # Create labels for display
     labels = [str(i) for i in range(matrix.shape[0])]
@@ -365,6 +394,17 @@ def _edge_metric(label: str, fair_prob: float, edge: float):
     )
 
 
+def _has_valid_ml_prob(signal) -> bool:
+    """Check if signal has valid ML probability."""
+    if not signal:
+        return False
+    try:
+        ml_prob = getattr(signal, "ml_prob", None)
+        return ml_prob is not None and isinstance(ml_prob, (int, float))
+    except Exception:
+        return False
+
+
 def _render_ml_insights(edge_analysis):
     """Render ML model insights."""
     st.subheader("ML Classification Insights")
@@ -373,8 +413,8 @@ def _render_ml_insights(edge_analysis):
     signal_ou = edge_analysis.signal_ou
     signal_btts = edge_analysis.signal_btts
 
-    has_ml_ou = signal_ou and hasattr(signal_ou, "ml_prob") and signal_ou.ml_prob is not None
-    has_ml_btts = signal_btts and hasattr(signal_btts, "ml_prob") and signal_btts.ml_prob is not None
+    has_ml_ou = _has_valid_ml_prob(signal_ou)
+    has_ml_btts = _has_valid_ml_prob(signal_btts)
 
     if not has_ml_ou and not has_ml_btts:
         st.info("ML models not trained or no ML data available for this match. "
@@ -386,8 +426,10 @@ def _render_ml_insights(edge_analysis):
     with col1:
         st.markdown("**Over/Under 2.5**")
         if has_ml_ou:
-            poisson_prob = getattr(signal_ou, "poisson_prob", signal_ou.fair_prob)
-            ml_prob = signal_ou.ml_prob
+            poisson_prob = getattr(signal_ou, "poisson_prob", None)
+            if poisson_prob is None:
+                poisson_prob = getattr(signal_ou, "fair_prob", 0.5)
+            ml_prob = getattr(signal_ou, "ml_prob", 0.5)
             ml_conf = getattr(signal_ou, "ml_confidence", "unknown")
 
             # Show comparison
@@ -411,8 +453,10 @@ def _render_ml_insights(edge_analysis):
     with col2:
         st.markdown("**Both Teams to Score**")
         if has_ml_btts:
-            poisson_prob = getattr(signal_btts, "poisson_prob", signal_btts.fair_prob)
-            ml_prob = signal_btts.ml_prob
+            poisson_prob = getattr(signal_btts, "poisson_prob", None)
+            if poisson_prob is None:
+                poisson_prob = getattr(signal_btts, "fair_prob", 0.5)
+            ml_prob = getattr(signal_btts, "ml_prob", 0.5)
             ml_conf = getattr(signal_btts, "ml_confidence", "unknown")
 
             st.metric(

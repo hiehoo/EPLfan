@@ -9,6 +9,7 @@ from src.fetchers.understat_fetcher import UnderstatFetcher, TeamXGData
 from src.fetchers.clubelo_fetcher import ClubELOFetcher, TeamELO
 from src.fetchers.polymarket_fetcher import PolymarketFetcher, PolymarketPrices
 from src.fetchers.historical_data_seeder import HistoricalDataSeeder, historical_seeder
+from src.fetchers.fixture_fetcher import FixtureFetcher, Fixture, fixture_fetcher
 from src.storage.database import db
 from src.storage.models import Match, OddsSnapshot, TeamStats
 
@@ -26,6 +27,9 @@ __all__ = [
     "PolymarketPrices",
     "HistoricalDataSeeder",
     "historical_seeder",
+    "FixtureFetcher",
+    "Fixture",
+    "fixture_fetcher",
 ]
 
 

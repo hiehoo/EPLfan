@@ -52,6 +52,13 @@ def fetch():
     asyncio.run(_fetch())
 
 
+def _validate_odds(odds_value: float, default: float) -> float:
+    """Validate odds are in reasonable range."""
+    if odds_value and 1.01 <= odds_value <= 1000:
+        return odds_value
+    return default
+
+
 @cli.command()
 @click.option("--match-id", type=int, help="Match ID to analyze")
 def analyze(match_id: int):
@@ -99,42 +106,69 @@ def analyze(match_id: int):
             click.echo("Missing data for analysis")
             return
 
-        try:
-            match_probs, weighted_probs, edge_analysis = match_analyzer.analyze(
-                match_id=str(match.id),
-                home_team=match.home_team,
-                away_team=match.away_team,
-                kickoff=match.kickoff,
-                home_xg=home_stats.home_xg,
-                away_xg=away_stats.away_xg,
-                home_xga=home_stats.home_xga,
-                away_xga=away_stats.away_xga,
-                home_elo=home_stats.elo_rating,
-                away_elo=away_stats.elo_rating,
-                bf_home_odds=odds.bf_home_odds or 2.5,
-                bf_draw_odds=odds.bf_draw_odds or 3.5,
-                bf_away_odds=odds.bf_away_odds or 3.0,
-            )
+        # Extract data to dicts to avoid DetachedInstanceError
+        match_data = {
+            "id": match.id,
+            "home_team": match.home_team,
+            "away_team": match.away_team,
+            "kickoff": match.kickoff,
+        }
 
-            result = {
-                "match": f"{match.home_team} vs {match.away_team}",
-                "kickoff": str(match.kickoff),
-                "fair_1x2": weighted_probs.fair_1x2,
-                "fair_ou": weighted_probs.fair_ou,
-                "fair_btts": weighted_probs.fair_btts,
-                "best_signal": (
-                    {
-                        "market": edge_analysis.best_signal.market_type,
-                        "selection": edge_analysis.best_signal.outcome,
-                        "edge": f"{edge_analysis.best_signal.edge:.1%}",
-                    }
-                    if edge_analysis.best_signal
-                    else None
-                ),
-            }
-            click.echo(json.dumps(result, indent=2, default=str))
-        except Exception as e:
-            click.echo(f"Analysis failed: {e}")
+        odds_data = {
+            "bf_home_odds": _validate_odds(odds.bf_home_odds, 2.5),
+            "bf_draw_odds": _validate_odds(odds.bf_draw_odds, 3.5),
+            "bf_away_odds": _validate_odds(odds.bf_away_odds, 3.0),
+        }
+
+        home_stats_data = {
+            "home_xg": home_stats.home_xg,
+            "home_xga": home_stats.home_xga,
+            "elo_rating": home_stats.elo_rating,
+        }
+
+        away_stats_data = {
+            "away_xg": away_stats.away_xg,
+            "away_xga": away_stats.away_xga,
+            "elo_rating": away_stats.elo_rating,
+        }
+
+    # Use extracted dicts outside session
+    try:
+        match_probs, weighted_probs, edge_analysis = match_analyzer.analyze(
+            match_id=str(match_data["id"]),
+            home_team=match_data["home_team"],
+            away_team=match_data["away_team"],
+            kickoff=match_data["kickoff"],
+            home_xg=home_stats_data["home_xg"],
+            away_xg=away_stats_data["away_xg"],
+            home_xga=home_stats_data["home_xga"],
+            away_xga=away_stats_data["away_xga"],
+            home_elo=home_stats_data["elo_rating"],
+            away_elo=away_stats_data["elo_rating"],
+            bf_home_odds=odds_data["bf_home_odds"],
+            bf_draw_odds=odds_data["bf_draw_odds"],
+            bf_away_odds=odds_data["bf_away_odds"],
+        )
+
+        result = {
+            "match": f"{match_data['home_team']} vs {match_data['away_team']}",
+            "kickoff": str(match_data["kickoff"]),
+            "fair_1x2": weighted_probs.fair_1x2,
+            "fair_ou": weighted_probs.fair_ou,
+            "fair_btts": weighted_probs.fair_btts,
+            "best_signal": (
+                {
+                    "market": edge_analysis.best_signal.market_type,
+                    "selection": edge_analysis.best_signal.outcome,
+                    "edge": f"{edge_analysis.best_signal.edge:.1%}",
+                }
+                if edge_analysis.best_signal
+                else None
+            ),
+        }
+        click.echo(json.dumps(result, indent=2, default=str))
+    except Exception as e:
+        click.echo(f"Analysis failed: {e}")
 
 
 @cli.command()
@@ -371,6 +405,32 @@ def _print_retrain_results(results: dict):
                 click.echo(f"  Old Accuracy: {data['old_accuracy']:.1%}")
             click.echo(f"  New Accuracy: {data['new_accuracy']:.1%}")
             click.echo(f"  Improvement: {data['improvement']:+.1%}")
+
+
+@cli.command()
+@click.option("--days", default=14, help="Days ahead to fetch (default 14)")
+@click.option("--api-key", envvar="FOOTBALL_DATA_API_KEY", help="football-data.org API key")
+def seed_fixtures(days: int, api_key: str):
+    """Fetch and seed upcoming EPL fixtures."""
+    from src.config import setup_logging
+    from src.fetchers.fixture_fetcher import FixtureFetcher
+
+    setup_logging()
+
+    click.echo(f"Fetching upcoming EPL fixtures ({days} days ahead)...")
+
+    fetcher = FixtureFetcher(api_key=api_key)
+    try:
+        results = fetcher.seed_fixtures(days_ahead=days)
+
+        click.echo("\nFixture Seeding Results:")
+        click.echo("-" * 40)
+        click.echo(f"Total fixtures found: {results['total']}")
+        click.echo(f"Imported: {results['imported']}")
+        click.echo(f"Skipped (existing): {results['skipped']}")
+        click.echo(f"With estimated odds: {results['with_odds']}")
+    finally:
+        fetcher.close()
 
 
 @cli.command()

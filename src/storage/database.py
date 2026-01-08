@@ -4,7 +4,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Generator
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker, Session
 
 from src.config.settings import settings
@@ -20,7 +20,21 @@ class Database:
         self.db_path = db_path or settings.database_path
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
 
-        self.engine = create_engine(f"sqlite:///{self.db_path}")
+        self.engine = create_engine(
+            f"sqlite:///{self.db_path}",
+            connect_args={
+                "timeout": 30,
+                "check_same_thread": False,
+            },
+            pool_pre_ping=True,
+        )
+
+        # Enable WAL mode for concurrent access
+        with self.engine.connect() as conn:
+            conn.execute(text("PRAGMA journal_mode=WAL"))
+            conn.execute(text("PRAGMA busy_timeout=30000"))
+            conn.commit()
+
         self.SessionLocal = sessionmaker(bind=self.engine)
 
     def create_tables(self) -> None:
@@ -36,7 +50,10 @@ class Database:
             yield session
             session.commit()
         except Exception:
-            session.rollback()
+            try:
+                session.rollback()
+            except Exception as rollback_error:
+                logger.warning(f"Rollback also failed: {rollback_error}")
             raise
         finally:
             session.close()

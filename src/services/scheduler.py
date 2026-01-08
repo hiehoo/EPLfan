@@ -1,11 +1,32 @@
 """APScheduler service for periodic tasks."""
+import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
+from functools import wraps
 from typing import Optional
 
 from src.config.settings import settings
 
 logger = logging.getLogger(__name__)
+
+JOB_TIMEOUT_SECONDS = 300  # 5 minutes
+
+
+def with_timeout(timeout: int = JOB_TIMEOUT_SECONDS):
+    """Decorator to add timeout to async jobs."""
+    def decorator(func):
+        @wraps(func)
+        async def wrapper(*args, **kwargs):
+            try:
+                return await asyncio.wait_for(
+                    func(*args, **kwargs),
+                    timeout=timeout
+                )
+            except asyncio.TimeoutError:
+                logger.error(f"Job {func.__name__} timed out after {timeout}s")
+                return None
+        return wrapper
+    return decorator
 
 
 class SchedulerService:
@@ -78,6 +99,7 @@ class SchedulerService:
             self._is_running = False
             logger.info("Scheduler stopped")
 
+    @with_timeout(300)
     async def scan_and_alert(self):
         """Main scan job - fetch data, analyze, and alert."""
         from src.fetchers import DataOrchestrator
@@ -97,28 +119,38 @@ class SchedulerService:
             await orchestrator.fetch_all()
 
             # 2. Get upcoming matches
-            with db.session() as session:
-                now = datetime.now(timezone.utc)
-                upcoming = (
-                    session.query(Match)
-                    .filter(
-                        Match.kickoff >= now,
-                        Match.kickoff <= now + timedelta(days=7),
-                        Match.is_completed == False,
-                    )
-                    .all()
-                )
+            match_data = []
+            try:
+                with db.session() as session:
+                    if session is None:
+                        logger.error("Database session is None")
+                        return
 
-                match_data = [
-                    {
-                        "id": m.id,
-                        "external_id": m.external_id,
-                        "home_team": m.home_team,
-                        "away_team": m.away_team,
-                        "kickoff": m.kickoff,
-                    }
-                    for m in upcoming
-                ]
+                    now = datetime.now(timezone.utc)
+                    upcoming = (
+                        session.query(Match)
+                        .filter(
+                            Match.kickoff >= now,
+                            Match.kickoff <= now + timedelta(days=7),
+                            Match.is_completed == False,
+                        )
+                        .all()
+                    )
+
+                    match_data = [
+                        {
+                            "id": m.id,
+                            "external_id": m.external_id,
+                            "home_team": m.home_team,
+                            "away_team": m.away_team,
+                            "kickoff": m.kickoff,
+                        }
+                        for m in upcoming
+                    ]
+            except Exception as db_error:
+                logger.error(f"Database error in scan_and_alert: {db_error}")
+                await telegram.send_error_alert("DatabaseError", str(db_error))
+                return
 
             # 3. Analyze each match and collect signals
             all_signals = []
@@ -153,146 +185,156 @@ class SchedulerService:
 
         signals = []
 
-        with db.session() as session:
-            # Get latest odds
-            odds = (
-                session.query(OddsSnapshot)
-                .filter(OddsSnapshot.match_id == match["id"])
-                .order_by(OddsSnapshot.snapshot_time.desc())
-                .first()
-            )
+        try:
+            with db.session() as session:
+                if session is None:
+                    logger.error("Database session is None in _analyze_and_store")
+                    return []
 
-            if not odds:
-                return []
-
-            # Get team stats
-            home_stats = (
-                session.query(TeamStats)
-                .filter(TeamStats.team_name == match["home_team"])
-                .order_by(TeamStats.snapshot_date.desc())
-                .first()
-            )
-            away_stats = (
-                session.query(TeamStats)
-                .filter(TeamStats.team_name == match["away_team"])
-                .order_by(TeamStats.snapshot_date.desc())
-                .first()
-            )
-
-            if not home_stats or not away_stats:
-                return []
-
-            # Run analysis
-            try:
-                match_probs, weighted_probs, edge_analysis = match_analyzer.analyze(
-                    match_id=str(match["id"]),
-                    home_team=match["home_team"],
-                    away_team=match["away_team"],
-                    kickoff=match["kickoff"],
-                    home_xg=home_stats.home_xg,
-                    away_xg=away_stats.away_xg,
-                    home_xga=home_stats.home_xga,
-                    away_xga=away_stats.away_xga,
-                    home_elo=home_stats.elo_rating,
-                    away_elo=away_stats.elo_rating,
-                    bf_home_odds=odds.bf_home_odds or 2.5,
-                    bf_draw_odds=odds.bf_draw_odds or 3.5,
-                    bf_away_odds=odds.bf_away_odds or 3.0,
-                    bf_over_2_5_odds=odds.bf_over_2_5_odds,
-                    bf_under_2_5_odds=odds.bf_under_2_5_odds,
-                    bf_btts_yes_odds=odds.bf_btts_yes_odds,
-                    bf_btts_no_odds=odds.bf_btts_no_odds,
-                    pm_home_price=odds.pm_home_price,
-                    pm_draw_price=odds.pm_draw_price,
-                    pm_away_price=odds.pm_away_price,
-                    pm_over_2_5_price=odds.pm_over_2_5_price,
-                    pm_under_2_5_price=odds.pm_under_2_5_price,
-                    pm_btts_yes_price=odds.pm_btts_yes_price,
-                    pm_btts_no_price=odds.pm_btts_no_price,
+                # Get latest odds
+                odds = (
+                    session.query(OddsSnapshot)
+                    .filter(OddsSnapshot.match_id == match["id"])
+                    .order_by(OddsSnapshot.snapshot_time.desc())
+                    .first()
                 )
 
-                # Store prediction
-                prediction = Prediction(
-                    match_id=match["id"],
-                    preset_used=weighted_probs.preset_name,
-                    p_home_model=weighted_probs.fair_1x2.get("home", 0),
-                    p_draw_model=weighted_probs.fair_1x2.get("draw", 0),
-                    p_away_model=weighted_probs.fair_1x2.get("away", 0),
-                    p_home_market=match_probs.polymarket_1x2.get("home", 0),
-                    p_draw_market=match_probs.polymarket_1x2.get("draw", 0),
-                    p_away_market=match_probs.polymarket_1x2.get("away", 0),
-                    edge_1x2=edge_analysis.signal_1x2.edge if edge_analysis.signal_1x2 else 0,
-                    signal_1x2=edge_analysis.signal_1x2.outcome if edge_analysis.signal_1x2 and edge_analysis.signal_1x2.is_actionable else "none",
-                    p_over_2_5_model=weighted_probs.fair_ou.get("2.5", {}).get("over", 0),
-                    p_over_2_5_market=match_probs.polymarket_ou.get("2.5", {}).get("over", 0),
-                    edge_ou=edge_analysis.signal_ou.edge if edge_analysis.signal_ou else 0,
-                    signal_ou=edge_analysis.signal_ou.outcome if edge_analysis.signal_ou and edge_analysis.signal_ou.is_actionable else "none",
-                    p_btts_yes_model=weighted_probs.fair_btts.get("yes", 0),
-                    p_btts_yes_market=match_probs.polymarket_btts.get("yes", 0),
-                    edge_btts=edge_analysis.signal_btts.edge if edge_analysis.signal_btts else 0,
-                    signal_btts=edge_analysis.signal_btts.outcome if edge_analysis.signal_btts and edge_analysis.signal_btts.is_actionable else "none",
+                if not odds:
+                    return []
+
+                # Get team stats
+                home_stats = (
+                    session.query(TeamStats)
+                    .filter(TeamStats.team_name == match["home_team"])
+                    .order_by(TeamStats.snapshot_date.desc())
+                    .first()
                 )
-                session.add(prediction)
+                away_stats = (
+                    session.query(TeamStats)
+                    .filter(TeamStats.team_name == match["away_team"])
+                    .order_by(TeamStats.snapshot_date.desc())
+                    .first()
+                )
 
-                # Build signal alerts for actionable signals
-                kickoff_str = match["kickoff"].strftime("%Y-%m-%d %H:%M UTC")
+                if not home_stats or not away_stats:
+                    return []
 
-                if edge_analysis.signal_1x2 and edge_analysis.signal_1x2.is_actionable:
-                    sig = edge_analysis.signal_1x2
-                    signals.append(
-                        SignalAlert(
-                            match_id=match["id"],
-                            home_team=match["home_team"],
-                            away_team=match["away_team"],
-                            kickoff=kickoff_str,
-                            market="1X2",
-                            selection=sig.outcome.upper(),
-                            fair_prob=sig.fair_prob,
-                            market_prob=sig.market_prob,
-                            edge=abs(sig.edge),
-                            weight_profile=weighted_probs.preset_name,
-                        )
+                # Run analysis
+                try:
+                    match_probs, weighted_probs, edge_analysis = match_analyzer.analyze(
+                        match_id=str(match["id"]),
+                        home_team=match["home_team"],
+                        away_team=match["away_team"],
+                        kickoff=match["kickoff"],
+                        home_xg=home_stats.home_xg,
+                        away_xg=away_stats.away_xg,
+                        home_xga=home_stats.home_xga,
+                        away_xga=away_stats.away_xga,
+                        home_elo=home_stats.elo_rating,
+                        away_elo=away_stats.elo_rating,
+                        bf_home_odds=odds.bf_home_odds or 2.5,
+                        bf_draw_odds=odds.bf_draw_odds or 3.5,
+                        bf_away_odds=odds.bf_away_odds or 3.0,
+                        bf_over_2_5_odds=odds.bf_over_2_5_odds,
+                        bf_under_2_5_odds=odds.bf_under_2_5_odds,
+                        bf_btts_yes_odds=odds.bf_btts_yes_odds,
+                        bf_btts_no_odds=odds.bf_btts_no_odds,
+                        pm_home_price=odds.pm_home_price,
+                        pm_draw_price=odds.pm_draw_price,
+                        pm_away_price=odds.pm_away_price,
+                        pm_over_2_5_price=odds.pm_over_2_5_price,
+                        pm_under_2_5_price=odds.pm_under_2_5_price,
+                        pm_btts_yes_price=odds.pm_btts_yes_price,
+                        pm_btts_no_price=odds.pm_btts_no_price,
                     )
 
-                if edge_analysis.signal_ou and edge_analysis.signal_ou.is_actionable:
-                    sig = edge_analysis.signal_ou
-                    signals.append(
-                        SignalAlert(
-                            match_id=match["id"],
-                            home_team=match["home_team"],
-                            away_team=match["away_team"],
-                            kickoff=kickoff_str,
-                            market="O/U 2.5",
-                            selection=sig.outcome.upper(),
-                            fair_prob=sig.fair_prob,
-                            market_prob=sig.market_prob,
-                            edge=abs(sig.edge),
-                            weight_profile=weighted_probs.preset_name,
-                        )
+                    # Store prediction
+                    prediction = Prediction(
+                        match_id=match["id"],
+                        preset_used=weighted_probs.preset_name,
+                        p_home_model=weighted_probs.fair_1x2.get("home", 0),
+                        p_draw_model=weighted_probs.fair_1x2.get("draw", 0),
+                        p_away_model=weighted_probs.fair_1x2.get("away", 0),
+                        p_home_market=match_probs.polymarket_1x2.get("home", 0),
+                        p_draw_market=match_probs.polymarket_1x2.get("draw", 0),
+                        p_away_market=match_probs.polymarket_1x2.get("away", 0),
+                        edge_1x2=edge_analysis.signal_1x2.edge if edge_analysis.signal_1x2 else 0,
+                        signal_1x2=edge_analysis.signal_1x2.outcome if edge_analysis.signal_1x2 and edge_analysis.signal_1x2.is_actionable else "none",
+                        p_over_2_5_model=weighted_probs.fair_ou.get("2.5", {}).get("over", 0),
+                        p_over_2_5_market=match_probs.polymarket_ou.get("2.5", {}).get("over", 0),
+                        edge_ou=edge_analysis.signal_ou.edge if edge_analysis.signal_ou else 0,
+                        signal_ou=edge_analysis.signal_ou.outcome if edge_analysis.signal_ou and edge_analysis.signal_ou.is_actionable else "none",
+                        p_btts_yes_model=weighted_probs.fair_btts.get("yes", 0),
+                        p_btts_yes_market=match_probs.polymarket_btts.get("yes", 0),
+                        edge_btts=edge_analysis.signal_btts.edge if edge_analysis.signal_btts else 0,
+                        signal_btts=edge_analysis.signal_btts.outcome if edge_analysis.signal_btts and edge_analysis.signal_btts.is_actionable else "none",
                     )
+                    session.add(prediction)
 
-                if edge_analysis.signal_btts and edge_analysis.signal_btts.is_actionable:
-                    sig = edge_analysis.signal_btts
-                    signals.append(
-                        SignalAlert(
-                            match_id=match["id"],
-                            home_team=match["home_team"],
-                            away_team=match["away_team"],
-                            kickoff=kickoff_str,
-                            market="BTTS",
-                            selection=sig.outcome.upper(),
-                            fair_prob=sig.fair_prob,
-                            market_prob=sig.market_prob,
-                            edge=abs(sig.edge),
-                            weight_profile=weighted_probs.preset_name,
+                    # Build signal alerts for actionable signals
+                    kickoff_str = match["kickoff"].strftime("%Y-%m-%d %H:%M UTC")
+
+                    if edge_analysis.signal_1x2 and edge_analysis.signal_1x2.is_actionable:
+                        sig = edge_analysis.signal_1x2
+                        signals.append(
+                            SignalAlert(
+                                match_id=match["id"],
+                                home_team=match["home_team"],
+                                away_team=match["away_team"],
+                                kickoff=kickoff_str,
+                                market="1X2",
+                                selection=sig.outcome.upper(),
+                                fair_prob=sig.fair_prob,
+                                market_prob=sig.market_prob,
+                                edge=abs(sig.edge),
+                                weight_profile=weighted_probs.preset_name,
+                            )
                         )
-                    )
 
-            except Exception as e:
-                logger.error(f"Analysis failed for match {match['id']}: {e}")
+                    if edge_analysis.signal_ou and edge_analysis.signal_ou.is_actionable:
+                        sig = edge_analysis.signal_ou
+                        signals.append(
+                            SignalAlert(
+                                match_id=match["id"],
+                                home_team=match["home_team"],
+                                away_team=match["away_team"],
+                                kickoff=kickoff_str,
+                                market="O/U 2.5",
+                                selection=sig.outcome.upper(),
+                                fair_prob=sig.fair_prob,
+                                market_prob=sig.market_prob,
+                                edge=abs(sig.edge),
+                                weight_profile=weighted_probs.preset_name,
+                            )
+                        )
+
+                    if edge_analysis.signal_btts and edge_analysis.signal_btts.is_actionable:
+                        sig = edge_analysis.signal_btts
+                        signals.append(
+                            SignalAlert(
+                                match_id=match["id"],
+                                home_team=match["home_team"],
+                                away_team=match["away_team"],
+                                kickoff=kickoff_str,
+                                market="BTTS",
+                                selection=sig.outcome.upper(),
+                                fair_prob=sig.fair_prob,
+                                market_prob=sig.market_prob,
+                                edge=abs(sig.edge),
+                                weight_profile=weighted_probs.preset_name,
+                            )
+                        )
+
+                except Exception as e:
+                    logger.error(f"Analysis failed for match {match['id']}: {e}")
+
+        except Exception as db_error:
+            logger.error(f"Database error analyzing match {match['id']}: {db_error}")
+            return []
 
         return signals
 
+    @with_timeout(300)
     async def daily_refresh(self):
         """Daily refresh of team statistics and ELO ratings."""
         from src.fetchers import DataOrchestrator
@@ -306,22 +348,32 @@ class SchedulerService:
         except Exception as e:
             logger.error(f"Daily refresh failed: {e}")
 
+    @with_timeout(300)
     async def check_matchday_scans(self):
         """Check if we need intensive scanning for imminent matches."""
         from src.storage.database import db
         from src.storage.models import Match
 
-        with db.session() as session:
-            now = datetime.now(timezone.utc)
-            imminent = (
-                session.query(Match)
-                .filter(
-                    Match.kickoff >= now,
-                    Match.kickoff <= now + timedelta(hours=4),
-                    Match.is_completed == False,
+        imminent = 0
+        try:
+            with db.session() as session:
+                if session is None:
+                    logger.error("Database session is None in check_matchday_scans")
+                    return
+
+                now = datetime.now(timezone.utc)
+                imminent = (
+                    session.query(Match)
+                    .filter(
+                        Match.kickoff >= now,
+                        Match.kickoff <= now + timedelta(hours=4),
+                        Match.is_completed == False,
+                    )
+                    .count()
                 )
-                .count()
-            )
+        except Exception as db_error:
+            logger.error(f"Database error in check_matchday_scans: {db_error}")
+            return
 
         if imminent > 0:
             logger.info(f"Matchday mode: {imminent} matches within 4h")

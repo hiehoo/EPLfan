@@ -176,6 +176,17 @@ class MLClassifier:
                     model_used="none",
                 )
 
+        # Validate input type
+        if not isinstance(features, np.ndarray):
+            logger.warning(f"Invalid features type: {type(features)}, expected ndarray")
+            return ClassificationResult(
+                market_type="ou",
+                outcome="over",
+                probability=0.5,
+                confidence="low",
+                model_used="none",
+            )
+
         # Ensure 2D input
         if features.ndim == 1:
             features = features.reshape(1, -1)

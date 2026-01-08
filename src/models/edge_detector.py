@@ -1,8 +1,11 @@
 """Detect edges between model fair price and market price."""
 import logging
+import math
 from dataclasses import dataclass
 from enum import Enum
 from typing import Optional
+
+import numpy as np
 
 from src.config.settings import settings
 from src.models.base_rate_tracker import base_rate_tracker
@@ -85,6 +88,13 @@ class EdgeDetector:
         self.threshold_ou = settings.edge_threshold_ou
         self.threshold_btts = settings.edge_threshold_btts
 
+    def _validate_edge(self, edge: float) -> float:
+        """Validate edge value, return 0.0 if invalid."""
+        if edge is None or math.isnan(edge) or math.isinf(edge):
+            logger.warning(f"Invalid edge value: {edge}, defaulting to 0.0")
+            return 0.0
+        return edge
+
     def analyze_match(
         self,
         match_id: str,
@@ -147,11 +157,11 @@ class EdgeDetector:
         for outcome in ["home", "draw", "away"]:
             fair = fair_probs.fair_1x2.get(outcome, 0)
             market = market_probs.polymarket_1x2.get(outcome, 0)
-            if market > 0:
+            if market > 0 and fair is not None and not (isinstance(fair, float) and math.isnan(fair)):
                 edges["1x2"][outcome] = {
                     "fair": fair,
                     "market": market,
-                    "edge": fair - market,
+                    "edge": self._validate_edge(fair - market),
                 }
 
         # O/U edges
@@ -161,11 +171,11 @@ class EdgeDetector:
         for outcome in ["over", "under"]:
             fair = fair_ou.get(outcome, 0)
             market = market_ou.get(outcome, 0)
-            if market > 0:
+            if market > 0 and fair is not None and not (isinstance(fair, float) and math.isnan(fair)):
                 edges["ou"][outcome] = {
                     "fair": fair,
                     "market": market,
-                    "edge": fair - market,
+                    "edge": self._validate_edge(fair - market),
                 }
 
         # BTTS edges
@@ -173,11 +183,11 @@ class EdgeDetector:
         for outcome in ["yes", "no"]:
             fair = fair_probs.fair_btts.get(outcome, 0)
             market = market_probs.polymarket_btts.get(outcome, 0)
-            if market > 0:
+            if market > 0 and fair is not None and not (isinstance(fair, float) and math.isnan(fair)):
                 edges["btts"][outcome] = {
                     "fair": fair,
                     "market": market,
-                    "edge": fair - market,
+                    "edge": self._validate_edge(fair - market),
                 }
 
         return edges
@@ -233,7 +243,7 @@ class EdgeDetector:
             edge=best_data["fair"] - best_data["market"],  # Keep naive for display
             edge_pct=(best_data["fair"] - best_data["market"]) * 100,
             direction=direction,
-            is_actionable=abs(best_true_edge) >= threshold,  # Use TRUE edge
+            is_actionable=abs(best_true_edge) >= max(threshold, 0.01),  # Use TRUE edge
             threshold_used=threshold,
             base_rate=best_data["base_rate"],
             true_edge=best_true_edge,
@@ -259,15 +269,17 @@ class EdgeDetector:
         base_rate = base_rate_tracker.get_base_rate(market_type, outcome, line)
 
         # Naive edge (what we had before)
-        naive_edge = model_prob - market_prob
+        naive_edge = self._validate_edge(model_prob - market_prob)
 
         # Skill component: how much better than just guessing?
         # If base_rate > 0.5, naive strategy is to always predict that outcome
-        skill_component = model_prob - max(base_rate, 1 - base_rate)
+        skill_component = self._validate_edge(model_prob - max(base_rate, 1 - base_rate))
 
         # True edge: minimum of naive and skill
         # This prevents false confidence from high base rate outcomes
-        true_edge = min(naive_edge, skill_component) if skill_component > 0 else 0
+        true_edge = self._validate_edge(
+            min(naive_edge, skill_component) if skill_component > 0 else 0
+        )
 
         # Elite team boost
         is_elite = (
@@ -359,8 +371,15 @@ class HybridEdgeDetector(EdgeDetector):
         if not self.use_ml or features is None:
             return base_analysis
 
-        # Get ML predictions
-        feature_array = features.to_array() if hasattr(features, 'to_array') else features
+        # Validate and get ML predictions
+        if hasattr(features, 'to_array'):
+            feature_array = features.to_array()
+        elif isinstance(features, np.ndarray):
+            feature_array = features
+        else:
+            logger.warning(f"Invalid features type: {type(features)}, using base analysis")
+            return base_analysis
+
         ml_ou = ml_classifier_ou.predict_proba(feature_array)
         ml_btts = ml_classifier_btts.predict_proba(feature_array)
 

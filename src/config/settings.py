@@ -54,6 +54,22 @@ class PolymarketSettings(BaseSettings):
         return bool(self.private_key.get_secret_value())
 
 
+class FootballDataSettings(BaseSettings):
+    """Football-Data.org API configuration."""
+
+    model_config = SettingsConfigDict(
+        env_prefix="FOOTBALL_DATA_",
+        env_file=".env",
+        extra="ignore"
+    )
+
+    api_key: str = ""
+
+    def is_configured(self) -> bool:
+        """Check if API key is configured."""
+        return bool(self.api_key)
+
+
 class WindowConfig(BaseSettings):
     """Rolling window configuration."""
     model_config = SettingsConfigDict(env_prefix="WINDOW_")
@@ -83,6 +99,7 @@ class AppSettings(BaseSettings):
     betfair: BetfairSettings = Field(default_factory=BetfairSettings)
     telegram: TelegramSettings = Field(default_factory=TelegramSettings)
     polymarket: PolymarketSettings = Field(default_factory=PolymarketSettings)
+    football_data: FootballDataSettings = Field(default_factory=FootballDataSettings)
     windows: WindowConfig = Field(default_factory=WindowConfig)
 
     @field_validator("log_level")
@@ -110,8 +127,13 @@ def load_weight_config(market_type: str) -> dict:
     if not weight_file.exists():
         raise FileNotFoundError(f"Weight config not found: {weight_file}")
 
-    with open(weight_file) as f:
-        config = yaml.safe_load(f)
+    try:
+        with open(weight_file) as f:
+            config = yaml.safe_load(f)
+    except FileNotFoundError:
+        raise
+    except Exception as e:
+        raise RuntimeError(f"Failed to load weight config {weight_file}: {e}")
 
     # Validate weights sum to 1.0 for each profile
     for profile_name, profile in config.items():
