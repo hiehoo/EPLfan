@@ -1,6 +1,11 @@
 """EPL Bet Indicator Dashboard."""
 import streamlit as st
 
+from src.storage.database import db
+
+# Ensure database tables exist on startup
+db.create_tables()
+
 st.set_page_config(
     page_title="EPL Bet Indicator",
     page_icon="⚽",
