@@ -150,6 +150,9 @@ def _render_quick_stats():
 def _render_match_header(match: dict):
     """Render match header with teams and kickoff."""
     kickoff = match["kickoff"]
+    # Make kickoff timezone-aware if naive (database returns naive datetimes)
+    if kickoff.tzinfo is None:
+        kickoff = kickoff.replace(tzinfo=timezone.utc)
     now = datetime.now(timezone.utc)
     time_to_kickoff = kickoff - now
 
