@@ -149,14 +149,20 @@ class EdgeDetector:
         )
 
     def _calculate_all_edges(self, fair_probs, market_probs) -> dict:
-        """Calculate edges for all outcomes in all markets."""
+        """Calculate edges for all outcomes in all markets.
+
+        Falls back to Betfair odds when Polymarket prices are missing.
+        """
         edges = {}
 
-        # 1X2 edges
+        # 1X2 edges - use Polymarket if available, else Betfair
         edges["1x2"] = {}
         for outcome in ["home", "draw", "away"]:
             fair = fair_probs.fair_1x2.get(outcome, 0)
+            # Try Polymarket first, fallback to Betfair
             market = market_probs.polymarket_1x2.get(outcome, 0)
+            if market == 0:
+                market = market_probs.betfair_1x2.get(outcome, 0)
             if market > 0 and fair is not None and not (isinstance(fair, float) and math.isnan(fair)):
                 edges["1x2"][outcome] = {
                     "fair": fair,
@@ -164,10 +170,13 @@ class EdgeDetector:
                     "edge": self._validate_edge(fair - market),
                 }
 
-        # O/U edges
+        # O/U edges - use Polymarket if available, else Betfair
         edges["ou"] = {}
         fair_ou = fair_probs.fair_ou.get("2.5", {})
+        # Try Polymarket first, fallback to Betfair
         market_ou = market_probs.polymarket_ou.get("2.5", {})
+        if not market_ou:
+            market_ou = market_probs.betfair_ou.get("2.5", {})
         for outcome in ["over", "under"]:
             fair = fair_ou.get(outcome, 0)
             market = market_ou.get(outcome, 0)
@@ -178,11 +187,14 @@ class EdgeDetector:
                     "edge": self._validate_edge(fair - market),
                 }
 
-        # BTTS edges
+        # BTTS edges - use Polymarket if available, else Betfair
         edges["btts"] = {}
         for outcome in ["yes", "no"]:
             fair = fair_probs.fair_btts.get(outcome, 0)
+            # Try Polymarket first, fallback to Betfair
             market = market_probs.polymarket_btts.get(outcome, 0)
+            if market == 0:
+                market = market_probs.betfair_btts.get(outcome, 0)
             if market > 0 and fair is not None and not (isinstance(fair, float) and math.isnan(fair)):
                 edges["btts"][outcome] = {
                     "fair": fair,
@@ -386,49 +398,59 @@ class HybridEdgeDetector(EdgeDetector):
         ml_ou = ml_classifier_ou.predict_proba(feature_array)
         ml_btts = ml_classifier_btts.predict_proba(feature_array)
 
-        # Enhance O/U signal with ML (create info signal if none exists)
-        if base_analysis.signal_ou:
-            enhanced_ou = self._enhance_with_ml(
-                base_signal=base_analysis.signal_ou,
-                ml_result=ml_ou,
+        # O/U signal - ML ALWAYS determines outcome direction
+        ou_edges = base_analysis.all_edges.get("ou", {})
+        ml_predicts_over = ml_ou.probability >= 0.5
+        outcome = "over" if ml_predicts_over else "under"
+        edge_data = ou_edges.get(outcome, {})
+
+        if edge_data:
+            # Create signal with ML-driven outcome
+            base_analysis.signal_ou = self._create_ml_info_signal(
                 market_type="ou",
+                outcome=outcome,
+                fair_prob=edge_data.get("fair", ml_ou.probability if ml_predicts_over else 1 - ml_ou.probability),
+                market_prob=edge_data.get("market", 0.5),
+                ml_result=ml_ou,
                 home_team=home_team,
                 away_team=away_team,
             )
-            base_analysis.signal_ou = enhanced_ou
         else:
-            # Create informational ML signal even without actionable edge
-            ou_edges = base_analysis.all_edges.get("ou", {})
-            over_edge = ou_edges.get("over", {})
+            # Fallback: create signal even without market data
             base_analysis.signal_ou = self._create_ml_info_signal(
                 market_type="ou",
-                outcome="over",
-                fair_prob=over_edge.get("fair", 0.5),
-                market_prob=over_edge.get("market", 0.5),
+                outcome=outcome,
+                fair_prob=ml_ou.probability if ml_predicts_over else 1 - ml_ou.probability,
+                market_prob=0.5,
                 ml_result=ml_ou,
                 home_team=home_team,
                 away_team=away_team,
             )
 
-        # Enhance BTTS signal with ML (create info signal if none exists)
-        if base_analysis.signal_btts:
-            enhanced_btts = self._enhance_with_ml(
-                base_signal=base_analysis.signal_btts,
-                ml_result=ml_btts,
+        # BTTS signal - ML ALWAYS determines outcome direction
+        btts_edges = base_analysis.all_edges.get("btts", {})
+        ml_predicts_yes = ml_btts.probability >= 0.5
+        outcome = "yes" if ml_predicts_yes else "no"
+        edge_data = btts_edges.get(outcome, {})
+
+        if edge_data:
+            # Create signal with ML-driven outcome
+            base_analysis.signal_btts = self._create_ml_info_signal(
                 market_type="btts",
+                outcome=outcome,
+                fair_prob=edge_data.get("fair", ml_btts.probability if ml_predicts_yes else 1 - ml_btts.probability),
+                market_prob=edge_data.get("market", 0.5),
+                ml_result=ml_btts,
                 home_team=home_team,
                 away_team=away_team,
             )
-            base_analysis.signal_btts = enhanced_btts
         else:
-            # Create informational ML signal even without actionable edge
-            btts_edges = base_analysis.all_edges.get("btts", {})
-            yes_edge = btts_edges.get("yes", {})
+            # Fallback: create signal even without market data
             base_analysis.signal_btts = self._create_ml_info_signal(
                 market_type="btts",
-                outcome="yes",
-                fair_prob=yes_edge.get("fair", 0.5),
-                market_prob=yes_edge.get("market", 0.5),
+                outcome=outcome,
+                fair_prob=ml_btts.probability if ml_predicts_yes else 1 - ml_btts.probability,
+                market_prob=0.5,
                 ml_result=ml_btts,
                 home_team=home_team,
                 away_team=away_team,

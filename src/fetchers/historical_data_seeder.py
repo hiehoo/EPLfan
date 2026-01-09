@@ -269,6 +269,23 @@ class HistoricalDataSeeder:
                     goal_diff = avg_goals_for - avg_goals_against
                     elo_rating = 1500 + (goal_diff * 100)
 
+                    # Calculate goal volatility (std dev of goals scored)
+                    goals_list = [m["goals_for"] for m in recent]
+                    if len(goals_list) > 1:
+                        import numpy as np
+                        goal_volatility = float(np.std(goals_list))
+                    else:
+                        goal_volatility = 0.5
+
+                    # Calculate shot conversion rate (estimated from goal efficiency)
+                    # Base conversion is ~10%, adjust by goal performance
+                    total_goals = sum(m["goals_for"] for m in recent)
+                    total_conceded = sum(m["goals_against"] for m in recent)
+                    # Higher scoring teams tend to have better conversion
+                    base_conversion = 0.10
+                    conversion_modifier = (avg_goals_for - 1.5) * 0.02  # ~1.5 goals is average
+                    shot_conversion_rate = min(0.18, max(0.06, base_conversion + conversion_modifier))
+
                     # Check for existing stats
                     snapshot_date = recent[-1]["date"]
                     existing = session.query(TeamStats).filter(
@@ -294,10 +311,10 @@ class HistoricalDataSeeder:
                         shots_per_game=avg_goals_for * 10,  # Rough estimate
                         shots_against_per_game=avg_goals_against * 10,
                         shots_on_target_per_game=avg_goals_for * 4,
-                        goal_volatility=1.0,
-                        xg_volatility=0.5,
-                        shot_conversion_rate=0.1,
-                        xg_overperformance=0.0,
+                        goal_volatility=goal_volatility,
+                        xg_volatility=goal_volatility * 1.1,  # xG volatility slightly higher
+                        shot_conversion_rate=shot_conversion_rate,
+                        xg_overperformance=(avg_goals_for - xg_for) if xg_for > 0 else 0.0,
                     )
                     session.add(team_stat)
                     stats_created += 1

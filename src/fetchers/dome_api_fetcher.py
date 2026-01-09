@@ -2,7 +2,6 @@
 import asyncio
 import logging
 import re
-import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional
@@ -14,55 +13,107 @@ from src.config.settings import settings
 logger = logging.getLogger(__name__)
 
 
+# Team name to Polymarket slug code mapping
+TEAM_SLUG_MAP = {
+    "Arsenal": "ars",
+    "Aston Villa": "avl",
+    "Bournemouth": "bou",
+    "Brentford": "bre",
+    "Brighton": "bha",
+    "Brighton & Hove Albion": "bha",
+    "Chelsea": "che",
+    "Crystal Palace": "cry",
+    "Everton": "eve",
+    "Fulham": "ful",
+    "Ipswich": "ips",
+    "Ipswich Town": "ips",
+    "Leicester": "lei",
+    "Leicester City": "lei",
+    "Liverpool": "liv",
+    "Man City": "mci",
+    "Manchester City": "mci",
+    "Man United": "mun",
+    "Manchester United": "mun",
+    "Newcastle": "new",
+    "Newcastle United": "new",
+    "Nott'm Forest": "nfo",
+    "Nottingham Forest": "nfo",
+    "Southampton": "sou",
+    "Tottenham": "tot",
+    "Tottenham Hotspur": "tot",
+    "West Ham": "whu",
+    "West Ham United": "whu",
+    "Wolves": "wol",
+    "Wolverhampton": "wol",
+    "Wolverhampton Wanderers": "wol",
+}
+
+# Full team names on Polymarket
+TEAM_FULL_NAME_MAP = {
+    "Arsenal": "Arsenal",
+    "Aston Villa": "Aston Villa",
+    "Bournemouth": "AFC Bournemouth",
+    "Brentford": "Brentford FC",
+    "Brighton": "Brighton & Hove Albion",
+    "Brighton & Hove Albion": "Brighton & Hove Albion",
+    "Chelsea": "Chelsea FC",
+    "Crystal Palace": "Crystal Palace",
+    "Everton": "Everton FC",
+    "Fulham": "Fulham FC",
+    "Ipswich": "Ipswich Town",
+    "Ipswich Town": "Ipswich Town",
+    "Leicester": "Leicester City",
+    "Leicester City": "Leicester City",
+    "Liverpool": "Liverpool FC",
+    "Man City": "Manchester City",
+    "Manchester City": "Manchester City",
+    "Man United": "Manchester United",
+    "Manchester United": "Manchester United",
+    "Newcastle": "Newcastle United",
+    "Newcastle United": "Newcastle United",
+    "Nott'm Forest": "Nottingham Forest",
+    "Nottingham Forest": "Nottingham Forest",
+    "Southampton": "Southampton FC",
+    "Tottenham": "Tottenham Hotspur",
+    "Tottenham Hotspur": "Tottenham Hotspur",
+    "West Ham": "West Ham United",
+    "West Ham United": "West Ham United",
+    "Wolves": "Wolverhampton Wanderers",
+    "Wolverhampton": "Wolverhampton Wanderers",
+    "Wolverhampton Wanderers": "Wolverhampton Wanderers",
+}
+
+
 @dataclass
-class DomeApiPrices:
-    """DomeAPI Polymarket prices for a match."""
-    market_slug: str
-    condition_id: str
+class PolymarketMatchPrices:
+    """Polymarket prices for a specific match."""
     home_team: str
     away_team: str
+    match_date: str  # YYYY-MM-DD
 
-    # 1X2 prices (0-1, where 0.55 = 55% implied)
-    home_win_price: float
-    draw_price: float
-    away_win_price: float
+    # Win prices (0-1 probability)
+    home_win_price: float = 0.0
+    away_win_price: float = 0.0
+    # Draw is typically 1 - home - away (Polymarket uses Yes/No for each team)
 
-    # O/U prices (optional)
-    over_1_5_price: Optional[float] = None
-    under_1_5_price: Optional[float] = None
-    over_2_5_price: Optional[float] = None
-    under_2_5_price: Optional[float] = None
-    over_3_5_price: Optional[float] = None
-    under_3_5_price: Optional[float] = None
-
-    # BTTS prices (optional)
-    btts_yes_price: Optional[float] = None
-    btts_no_price: Optional[float] = None
-
-    # Market metrics
-    volume: float = 0
-    liquidity: float = 0
+    # Market metadata
+    home_market_slug: str = ""
+    away_market_slug: str = ""
+    volume: float = 0.0
 
     fetched_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class DomeApiFetcher:
-    """Fetch EPL market prices from Polymarket via DomeAPI.
+    """Fetch EPL match prices from Polymarket via DomeAPI.
 
-    DomeAPI provides a documented wrapper around Polymarket with
-    reliable rate limits and structured responses.
+    Flow:
+    1. Get fixture (home_team, away_team, date) from Football-Data/Betfair
+    2. Search DomeAPI for "Will {Team} win on {date}?" markets
+    3. Fetch prices via /polymarket/market-price/{token_id}
     """
 
     BASE_URL = "https://api.domeapi.io/v1"
-
-    # EPL team names for search
-    EPL_TEAMS = [
-        "Arsenal", "Aston Villa", "Bournemouth", "Brentford", "Brighton",
-        "Chelsea", "Crystal Palace", "Everton", "Fulham", "Ipswich",
-        "Leicester", "Liverpool", "Manchester City", "Manchester United",
-        "Newcastle", "Nottingham Forest", "Southampton", "Tottenham",
-        "West Ham", "Wolves"
-    ]
 
     def __init__(self):
         if not settings.dome_api.is_configured():
@@ -79,196 +130,225 @@ class DomeApiFetcher:
         self._rate_limiter = asyncio.Semaphore(1)
         self._last_request = 0.0
 
-    async def fetch_epl_markets(self) -> list[DomeApiPrices]:
-        """Fetch all EPL match markets from Polymarket via DomeAPI.
+        # Cache for markets to avoid repeated searches
+        self._market_cache: dict[str, dict] = {}
 
-        Returns:
-            List of DomeApiPrices with 1X2/OU/BTTS prices
-        """
-        if not self._api_key:
-            logger.warning("DomeAPI not configured, returning empty list")
-            return []
-
-        try:
-            # Search for Premier League markets
-            markets = await self._search_markets("premier league")
-
-            results = []
-            for market in markets:
-                prices = self._extract_prices(market)
-                if prices:
-                    results.append(prices)
-
-            logger.info(f"Fetched {len(results)} EPL markets from DomeAPI")
-            return results
-
-        except Exception as e:
-            logger.error(f"Error fetching DomeAPI data: {e}")
-            return []
-
-    async def _search_markets(self, query: str) -> list[dict]:
-        """Search for markets by query.
+    async def fetch_match_prices(
+        self,
+        home_team: str,
+        away_team: str,
+        match_date: datetime
+    ) -> Optional[PolymarketMatchPrices]:
+        """Fetch Polymarket prices for a specific match.
 
         Args:
-            query: Search term (e.g., "premier league")
+            home_team: Home team name
+            away_team: Away team name
+            match_date: Match kickoff datetime
 
         Returns:
-            List of market dictionaries
+            PolymarketMatchPrices if markets found, None otherwise
+        """
+        if not self._api_key:
+            logger.debug("DomeAPI not configured")
+            return None
+
+        date_str = match_date.strftime("%Y-%m-%d")
+
+        # Search for both team win markets
+        home_market = await self._find_team_win_market(home_team, date_str)
+        away_market = await self._find_team_win_market(away_team, date_str)
+
+        if not home_market and not away_market:
+            logger.debug(f"No Polymarket markets for {home_team} vs {away_team} on {date_str}")
+            return None
+
+        prices = PolymarketMatchPrices(
+            home_team=home_team,
+            away_team=away_team,
+            match_date=date_str,
+        )
+
+        # Get home win price
+        if home_market:
+            prices.home_market_slug = home_market.get("market_slug", "")
+            token_yes = home_market.get("side_a", {}).get("id")
+            if token_yes:
+                price = await self._get_token_price(token_yes)
+                if price is not None:
+                    prices.home_win_price = price
+            prices.volume += home_market.get("volume_total", 0)
+
+        # Get away win price
+        if away_market:
+            prices.away_market_slug = away_market.get("market_slug", "")
+            token_yes = away_market.get("side_a", {}).get("id")
+            if token_yes:
+                price = await self._get_token_price(token_yes)
+                if price is not None:
+                    prices.away_win_price = price
+            prices.volume += away_market.get("volume_total", 0)
+
+        return prices
+
+    async def _find_team_win_market(self, team: str, date_str: str) -> Optional[dict]:
+        """Find "Will {Team} win on {date}?" market.
+
+        Args:
+            team: Team name
+            date_str: Date in YYYY-MM-DD format
+
+        Returns:
+            Market dict if found, None otherwise
+        """
+        cache_key = f"{team}:{date_str}"
+        if cache_key in self._market_cache:
+            return self._market_cache[cache_key]
+
+        # Get Polymarket team name
+        pm_team = TEAM_FULL_NAME_MAP.get(team, team)
+
+        # Search patterns to try
+        search_queries = [
+            f"{pm_team} win {date_str}",
+            f"{team} win {date_str}",
+        ]
+
+        for query in search_queries:
+            await self._respect_rate_limit()
+
+            try:
+                response = await self.client.get(
+                    f"{self.BASE_URL}/polymarket/markets",
+                    params={"q": query, "closed": "false", "limit": 10}
+                )
+                response.raise_for_status()
+
+                data = response.json()
+                markets = data.get("markets", [])
+
+                for market in markets:
+                    title = market.get("title", "")
+                    tags = market.get("tags", [])
+
+                    # Check if this is the right market
+                    if date_str in title and ("EPL" in tags or "Premier League" in tags):
+                        # Verify team name is in title
+                        if pm_team.lower() in title.lower() or team.lower() in title.lower():
+                            self._market_cache[cache_key] = market
+                            logger.debug(f"Found market: {title}")
+                            return market
+
+            except Exception as e:
+                logger.debug(f"Search error for '{query}': {e}")
+
+        # Try tag-based search as fallback
+        await self._respect_rate_limit()
+        try:
+            response = await self.client.get(
+                f"{self.BASE_URL}/polymarket/markets",
+                params={"tags": "EPL", "closed": "false", "limit": 100}
+            )
+            response.raise_for_status()
+
+            data = response.json()
+            markets = data.get("markets", [])
+
+            for market in markets:
+                title = market.get("title", "")
+
+                # Match pattern: "Will {Team} win on {date}?"
+                if date_str in title:
+                    if pm_team.lower() in title.lower() or team.lower() in title.lower():
+                        self._market_cache[cache_key] = market
+                        logger.debug(f"Found market via tags: {title}")
+                        return market
+
+        except Exception as e:
+            logger.debug(f"Tag search error: {e}")
+
+        self._market_cache[cache_key] = None
+        return None
+
+    async def _get_token_price(self, token_id: str) -> Optional[float]:
+        """Get current price for a token.
+
+        Args:
+            token_id: Polymarket token ID
+
+        Returns:
+            Price (0-1) or None if not available
         """
         await self._respect_rate_limit()
 
         try:
             response = await self.client.get(
+                f"{self.BASE_URL}/polymarket/market-price/{token_id}"
+            )
+
+            if response.status_code == 200:
+                data = response.json()
+                price = data.get("price")
+                if price is not None:
+                    return float(price)
+
+        except Exception as e:
+            logger.debug(f"Price fetch error: {e}")
+
+        return None
+
+    async def fetch_epl_markets(self) -> list[dict]:
+        """Fetch all available EPL markets from Polymarket.
+
+        Returns list of market dicts with structure:
+        {
+            "title": "Will Liverpool FC win on 2026-01-01?",
+            "market_slug": "epl-liv-lee-2026-01-01-liv",
+            "game_start_time": "2026-01-01T17:30:00Z",
+            "side_a": {"id": "...", "label": "Yes"},
+            "side_b": {"id": "...", "label": "No"},
+            ...
+        }
+        """
+        if not self._api_key:
+            logger.warning("DomeAPI not configured")
+            return []
+
+        await self._respect_rate_limit()
+
+        try:
+            response = await self.client.get(
                 f"{self.BASE_URL}/polymarket/markets",
-                params={"q": query, "closed": "false"}
+                params={"tags": "EPL", "closed": "false", "limit": 100}
             )
             response.raise_for_status()
 
             data = response.json()
-            markets = data.get("markets", data) if isinstance(data, dict) else data
+            markets = data.get("markets", [])
 
-            # Filter for EPL-relevant markets
-            epl_markets = []
-            for market in markets if isinstance(markets, list) else []:
-                question = market.get("question", "").lower()
-                description = market.get("description", "").lower()
+            # Filter for match-specific markets (not season winners)
+            match_markets = []
+            for m in markets:
+                title = m.get("title", "")
+                # Match pattern: contains date like "2026-01-01" or "win on"
+                if re.search(r"\d{4}-\d{2}-\d{2}", title) or "win on" in title.lower():
+                    match_markets.append(m)
 
-                # Check for Premier League keywords
-                if "premier league" in question or "premier league" in description:
-                    epl_markets.append(market)
-                    continue
-
-                # Check for EPL team names
-                for team in self.EPL_TEAMS:
-                    if team.lower() in question:
-                        epl_markets.append(market)
-                        break
-
-            return epl_markets
-
-        except httpx.HTTPStatusError as e:
-            if e.response.status_code == 429:
-                logger.warning("DomeAPI rate limit hit, backing off")
-                await asyncio.sleep(10)
-            logger.error(f"DomeAPI search error: {e}")
-            return []
-        except Exception as e:
-            logger.error(f"DomeAPI search error: {e}")
-            return []
-
-    def _extract_prices(self, market: dict) -> Optional[DomeApiPrices]:
-        """Extract prices from market data.
-
-        Args:
-            market: Market dictionary from DomeAPI
-
-        Returns:
-            DomeApiPrices if valid match market, None otherwise
-        """
-        try:
-            question = market.get("question", "")
-            market_slug = market.get("market_slug", market.get("slug", ""))
-            condition_id = market.get("condition_id", "")
-
-            # Parse team names
-            home_team, away_team = self._parse_teams(question)
-            if not home_team or not away_team:
-                return None
-
-            # Extract token/outcome prices
-            tokens = market.get("tokens", market.get("outcomes", []))
-            if not tokens:
-                return None
-
-            home_price = draw_price = away_price = 0.0
-            over_2_5 = under_2_5 = btts_yes = btts_no = None
-            volume = market.get("volume", 0)
-            liquidity = market.get("liquidity", 0)
-
-            for token in tokens:
-                outcome = token.get("outcome", token.get("name", "")).lower()
-                price = float(token.get("price", 0))
-
-                # Match result (1X2)
-                if "home" in outcome or home_team.lower() in outcome:
-                    home_price = price
-                elif "draw" in outcome:
-                    draw_price = price
-                elif "away" in outcome or away_team.lower() in outcome:
-                    away_price = price
-
-                # Over/Under 2.5
-                elif "over 2.5" in outcome or "over2.5" in outcome:
-                    over_2_5 = price
-                elif "under 2.5" in outcome or "under2.5" in outcome:
-                    under_2_5 = price
-
-                # BTTS
-                elif "btts yes" in outcome or "both teams to score" in outcome:
-                    btts_yes = price
-                elif "btts no" in outcome:
-                    btts_no = price
-
-            # Skip if no valid prices
-            if home_price == 0 and draw_price == 0 and away_price == 0:
-                return None
-
-            return DomeApiPrices(
-                market_slug=market_slug,
-                condition_id=condition_id,
-                home_team=home_team,
-                away_team=away_team,
-                home_win_price=home_price,
-                draw_price=draw_price,
-                away_win_price=away_price,
-                over_2_5_price=over_2_5,
-                under_2_5_price=under_2_5,
-                btts_yes_price=btts_yes,
-                btts_no_price=btts_no,
-                volume=volume,
-                liquidity=liquidity,
-                fetched_at=datetime.now(timezone.utc),
-            )
+            logger.info(f"Found {len(match_markets)} EPL match markets")
+            return match_markets
 
         except Exception as e:
-            logger.warning(f"Error extracting DomeAPI prices: {e}")
-            return None
-
-    def _parse_teams(self, question: str) -> tuple[str, str]:
-        """Parse team names from market question.
-
-        Handles patterns like:
-        - "Arsenal vs Chelsea"
-        - "Will Arsenal win against Chelsea?"
-        - "Arsenal v Chelsea - Winner"
-        """
-        # Pattern: Team1 vs/v./versus Team2
-        vs_pattern = r"(.+?)\s+(?:vs\.?|v\.?|versus)\s+(.+?)(?:\s*[-:?]|$)"
-        match = re.search(vs_pattern, question, re.IGNORECASE)
-
-        if match:
-            home = match.group(1).strip()
-            away = match.group(2).strip()
-            # Clean up common suffixes
-            away = re.sub(r"\s*[-:?].*$", "", away)
-            return home, away
-
-        # Pattern: Will Team1 win/beat Team2
-        win_pattern = r"Will\s+(.+?)\s+(?:win|beat)\s+(?:against\s+)?(.+?)(?:\?|$)"
-        match = re.search(win_pattern, question, re.IGNORECASE)
-
-        if match:
-            return match.group(1).strip(), match.group(2).strip()
-
-        return "", ""
+            logger.error(f"Error fetching EPL markets: {e}")
+            return []
 
     async def _respect_rate_limit(self) -> None:
         """Ensure we don't exceed rate limits (Free tier: 1/sec)."""
+        import time
         async with self._rate_limiter:
             now = time.time()
             elapsed = now - self._last_request
-            if elapsed < 1.0:
-                await asyncio.sleep(1.0 - elapsed)
+            if elapsed < 1.1:  # Add small buffer
+                await asyncio.sleep(1.1 - elapsed)
             self._last_request = time.time()
 
     async def close(self) -> None:

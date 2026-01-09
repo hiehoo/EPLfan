@@ -8,7 +8,7 @@ from src.fetchers.betfair_fetcher import BetfairFetcher, BetfairOdds
 from src.fetchers.understat_fetcher import UnderstatFetcher, TeamXGData
 from src.fetchers.clubelo_fetcher import ClubELOFetcher, TeamELO
 from src.fetchers.polymarket_fetcher import PolymarketFetcher, PolymarketPrices
-from src.fetchers.dome_api_fetcher import DomeApiFetcher, DomeApiPrices
+from src.fetchers.dome_api_fetcher import DomeApiFetcher, PolymarketMatchPrices
 from src.fetchers.historical_data_seeder import HistoricalDataSeeder, historical_seeder
 from src.fetchers.fixture_fetcher import FixtureFetcher, Fixture, fixture_fetcher
 from src.config.settings import settings
@@ -28,7 +28,7 @@ __all__ = [
     "PolymarketFetcher",
     "PolymarketPrices",
     "DomeApiFetcher",
-    "DomeApiPrices",
+    "PolymarketMatchPrices",
     "HistoricalDataSeeder",
     "historical_seeder",
     "FixtureFetcher",
@@ -174,8 +174,8 @@ class DataOrchestrator:
     def _find_matching_poly(
         self,
         bf_odds: BetfairOdds,
-        poly_data: list[Union[PolymarketPrices, DomeApiPrices]]
-    ) -> Optional[Union[PolymarketPrices, DomeApiPrices]]:
+        poly_data: list[Union[PolymarketPrices, PolymarketMatchPrices]]
+    ) -> Optional[Union[PolymarketPrices, PolymarketMatchPrices]]:
         """Find Polymarket/DomeAPI data matching Betfair match."""
         for poly in poly_data:
             # Fuzzy match on team names

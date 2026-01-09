@@ -57,7 +57,11 @@ class PolymarketSettings(BaseSettings):
 class DomeApiSettings(BaseSettings):
     """DomeAPI configuration (Polymarket wrapper)."""
 
-    model_config = SettingsConfigDict(env_prefix="DOME_API_")
+    model_config = SettingsConfigDict(
+        env_prefix="DOME_",
+        env_file=".env",
+        extra="ignore"
+    )
 
     api_key: SecretStr = SecretStr("")
 
@@ -103,7 +107,7 @@ class AppSettings(BaseSettings):
     scan_interval_minutes: int = 15
 
     # Edge thresholds
-    edge_threshold_1x2: float = 0.05  # 5%
+    edge_threshold_1x2: float = 0.05  # 5% (profitable threshold based on backtest)
     edge_threshold_ou: float = 0.07   # 7%
     edge_threshold_btts: float = 0.07  # 7%
 
