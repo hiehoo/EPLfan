@@ -1,4 +1,4 @@
-"""EPL Bet Indicator Dashboard."""
+"""EPL Bet Indicator Dashboard - Single Page Layout."""
 import streamlit as st
 
 # Load Streamlit secrets into env vars BEFORE importing other modules
@@ -14,7 +14,7 @@ st.set_page_config(
     page_title="EPL Bet Indicator",
     page_icon="⚽",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed",
 )
 
 # Custom CSS for professional dark mode styling
@@ -40,6 +40,11 @@ CUSTOM_CSS = """
         -webkit-text-fill-color: transparent;
         background-clip: text;
         font-weight: 700 !important;
+    }
+
+    /* Hide sidebar */
+    section[data-testid="stSidebar"] {
+        display: none;
     }
 
     /* Card styling */
@@ -78,27 +83,35 @@ CUSTOM_CSS = """
         font-weight: 600 !important;
     }
 
-    /* Sidebar styling */
-    section[data-testid="stSidebar"] {
-        background: linear-gradient(180deg, #0F172A 0%, #1E293B 100%);
-        border-right: 1px solid #334155;
+    /* Tabs styling */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 8px;
+        background: #0F172A;
+        padding: 0.5rem;
+        border-radius: 10px;
     }
 
-    section[data-testid="stSidebar"] [data-testid="stMarkdown"] {
-        color: #F8FAFC;
-    }
-
-    /* Radio buttons in sidebar */
-    section[data-testid="stSidebar"] .stRadio > label {
-        color: #94A3B8 !important;
+    .stTabs [data-baseweb="tab"] {
+        background: transparent;
+        border-radius: 8px;
+        color: #94A3B8;
+        font-family: 'Poppins', sans-serif;
         font-weight: 500;
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
-        font-size: 0.75rem;
+        padding: 0.5rem 1rem;
     }
 
-    section[data-testid="stSidebar"] .stRadio [data-testid="stWidgetLabel"] {
-        color: #F59E0B !important;
+    .stTabs [aria-selected="true"] {
+        background: linear-gradient(135deg, #F59E0B 0%, #D97706 100%) !important;
+        color: #0F172A !important;
+    }
+
+    /* Match selector styling */
+    .match-selector-container {
+        background: linear-gradient(145deg, #1E293B 0%, #0F172A 100%);
+        border: 1px solid #334155;
+        border-radius: 12px;
+        padding: 1.5rem;
+        margin-bottom: 1.5rem;
     }
 
     /* Expander styling */
@@ -199,6 +212,26 @@ CUSTOM_CSS = """
     .edge-marginal { color: #FB923C; }
     .edge-below { color: #64748B; }
 
+    /* Section headers */
+    .section-header {
+        font-family: 'Poppins', sans-serif;
+        font-size: 1.25rem;
+        font-weight: 600;
+        color: #F8FAFC;
+        margin: 1.5rem 0 1rem 0;
+        padding-bottom: 0.5rem;
+        border-bottom: 2px solid #334155;
+    }
+
+    /* Quick stats row */
+    .quick-stats-container {
+        background: linear-gradient(145deg, #1E293B 0%, #0F172A 100%);
+        border: 1px solid #334155;
+        border-radius: 12px;
+        padding: 1rem 1.5rem;
+        margin-bottom: 1rem;
+    }
+
     /* Footer branding */
     footer {
         visibility: hidden;
@@ -227,29 +260,27 @@ CUSTOM_CSS = """
 
 
 def main():
-    """Main dashboard entry."""
+    """Main dashboard entry - single page layout."""
     # Inject custom CSS
     st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 
-    st.title("EPL Bet Indicator v2")
-    st.caption("Multi-market betting indicator for Polymarket")
+    # Header
+    st.title("EPL Bet Indicator")
+    st.caption("Multi-market betting analytics for Polymarket")
 
-    # Sidebar navigation
-    page = st.sidebar.radio(
-        "Navigation",
-        ["Live Signals", "Match Analysis", "Historical Performance", "Settings"],
-    )
+    # Import and render the unified match analysis (main content)
+    from src.ui.pages import match_analysis_unified
+    match_analysis_unified.render()
 
-    if page == "Live Signals":
-        from src.ui.pages import live_signals
-        live_signals.render()
-    elif page == "Match Analysis":
-        from src.ui.pages import match_analysis
-        match_analysis.render()
-    elif page == "Historical Performance":
+    # Collapsible Historical Performance section
+    st.markdown("<div class='section-header'>Historical Performance</div>", unsafe_allow_html=True)
+    with st.expander("View Historical Analytics", expanded=False):
         from src.ui.pages import historical
         historical.render()
-    elif page == "Settings":
+
+    # Collapsible Settings section
+    st.markdown("<div class='section-header'>Settings</div>", unsafe_allow_html=True)
+    with st.expander("Configure Settings", expanded=False):
         from src.ui.pages import settings_page
         settings_page.render()
 
